@@ -1,0 +1,18 @@
+{
+  "name": "poolrooms-webgpu",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Local PoC: poolrooms-style first-person scene in three.js with WebGPU and WebGL fallback.",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "three": "0.187.0"
+  },
+  "devDependencies": {
+    "vite": "8.3.8"
+  }
+}

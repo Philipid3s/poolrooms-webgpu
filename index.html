@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Poolrooms — WebGPU PoC</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect width='16' height='16' fill='%23d4c48a'/></svg>" />
+    <style>
+      * { margin: 0; box-sizing: border-box; }
+      html, body {
+        overflow: hidden;
+        width: 100%;
+        height: 100%;
+        background: #16140e;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      }
+      #overlay {
+        position: fixed;
+        top: 12px;
+        left: 12px;
+        color: #f3ecd6;
+        background: rgba(0, 0, 0, 0.58);
+        padding: 8px 10px;
+        border-radius: 4px;
+        font-size: 12px;
+        line-height: 1.5;
+        z-index: 10;
+        pointer-events: none;
+        white-space: pre;
+      }
+      #blocker {
+        position: fixed;
+        inset: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: rgba(12, 11, 8, 0.62);
+        color: #f3ecd6;
+        z-index: 5;
+        cursor: pointer;
+        text-align: center;
+        padding: 24px;
+      }
+      #blocker.hidden { display: none; }
+      #blocker h1 {
+        font-size: 22px;
+        font-weight: 600;
+        letter-spacing: 0.02em;
+        margin-bottom: 10px;
+      }
+      #blocker p {
+        font-size: 13px;
+        opacity: 0.88;
+        line-height: 1.55;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="overlay">Initializing…</div>
+    <div id="blocker">
+      <div>
+        <h1>Poolrooms</h1>
+        <p>
+          Click to enter (pointer lock).<br />
+          WASD to move · mouse to look · Esc to release.
+        </p>
+      </div>
+    </div>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
