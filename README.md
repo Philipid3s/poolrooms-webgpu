@@ -25,7 +25,6 @@ npm run preview
 
 Versions are pinned exactly in `package.json` (no `^` / `~`). Use `npm ci` so the lockfile is respected.
 
-A zip of the source (without `node_modules/` or `dist/`) may also be available on the box at `/workspace/bots-work/judy/poolrooms-webgpu.zip`.
 
 ## Controls
 
