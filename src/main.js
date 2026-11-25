@@ -79,16 +79,16 @@ async function boot() {
 }
 
 function addLights(THREE, scene, lightsAt) {
-  const hemi = new THREE.HemisphereLight(0xf4f1de, 0x4a4a38, 0.85);
+  const hemi = new THREE.HemisphereLight(0xf4f1de, 0x4a4a38, 0.6);
   scene.add(hemi);
 
-  const ambient = new THREE.AmbientLight(0xe8dfc0, 0.55);
+  const ambient = new THREE.AmbientLight(0xe8dfc0, 0.4);
   scene.add(ambient);
 
   // One fluorescent-style point light per room. Intensity is in candela
   // (physically based); 25 lights is acceptable for a 5x5 grid.
   for (const pos of lightsAt) {
-    const light = new THREE.PointLight(0xf7f3dc, 40, 16, 1.4);
+    const light = new THREE.PointLight(0xf7f3dc, 26, 14, 1.6);
     light.position.set(pos.x, WALL_HEIGHT - 0.28, pos.z);
     scene.add(light);
 

@@ -37,7 +37,7 @@ export function buildMap(THREE, seed) {
 
   const floorMat = new THREE.MeshStandardMaterial({
     map: floorTex,
-    roughness: 0.28,
+    roughness: 0.5,
     metalness: 0.02,
     color: 0xffffff,
   });
@@ -227,7 +227,6 @@ function addRoomFloor(THREE, group, floorMat, poolBottomMat, curbMat, colliders,
     const mesh = new THREE.Mesh(geo, floorMat);
     mesh.rotation.x = -Math.PI / 2;
     mesh.position.set(cx, 0, cz);
-    mesh.receiveShadow = true;
     group.add(mesh);
     return;
   }
