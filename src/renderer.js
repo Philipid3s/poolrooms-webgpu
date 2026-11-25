@@ -4,6 +4,8 @@
  * falls back to WebGLRenderer. `?renderer=webgl` forces the fallback.
  */
 
+const TONE_MAPPING_EXPOSURE = 1.15;
+
 export function wantsForcedWebGL() {
   const params = new URLSearchParams(window.location.search);
   return params.get('renderer') === 'webgl';
@@ -42,19 +44,23 @@ export async function createRenderer(canvasParent = document.body) {
     const THREE = await import('three/webgpu');
     const renderer = new THREE.WebGPURenderer({ antialias: true });
     await renderer.init();
-    configureRenderer(renderer);
+    configureRenderer(THREE, renderer);
     canvasParent.appendChild(renderer.domElement);
     return { THREE, renderer, kind: 'WebGPU', detection, forced };
   }
 
   const THREE = await import('three');
   const renderer = new THREE.WebGLRenderer({ antialias: true });
-  configureRenderer(renderer);
+  configureRenderer(THREE, renderer);
   canvasParent.appendChild(renderer.domElement);
   return { THREE, renderer, kind: 'WebGL', detection, forced };
 }
 
-function configureRenderer(renderer) {
+function configureRenderer(THREE, renderer) {
+  // Same output pipeline on both backends so they are comparable.
+  renderer.outputColorSpace = THREE.SRGBColorSpace;
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  renderer.toneMappingExposure = TONE_MAPPING_EXPOSURE;
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
   renderer.setSize(window.innerWidth, window.innerHeight);
   renderer.domElement.tabIndex = 0;
