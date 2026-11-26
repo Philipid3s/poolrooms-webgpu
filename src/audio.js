@@ -8,6 +8,9 @@
  *   (in sync with the ripples on WebGPU), splashy steps while wading.
  * - Footsteps on tile at a natural walking cadence (time-based, so the
  *   rhythm stays human even though the player moves fast).
+ * - The hostile presence (threat.js): breathing and a low drone that follow
+ *   it, heavy wet steps, crackling tubes near it, a stinger when it starts
+ *   chasing you, and a violent burst when it catches you.
  * - Everything except the hum goes through a generated tiled-room reverb:
  *   that is the echo.
  *
@@ -24,6 +27,7 @@ const RUN_STEP_INTERVAL = 0.38;
 const WADE_STEP_INTERVAL = 0.62;
 const STEP_LEVEL = 0.5; // overall footstep loudness
 const MASTER_LEVEL = 0.8;
+const CRACKLE_RADIUS = 10; // matches lights.js FLICKER_RADIUS
 
 /**
  * @param {object} THREE either build (only Vector3 is used)
@@ -67,7 +71,15 @@ export function createAudio(THREE, { fixtures, fixtureY, pools, waterY }) {
     const noise = makeNoiseBuffer(ctx, 2, 'white');
     const brown = makeNoiseBuffer(ctx, 6, 'brown');
 
-    nodes = { master, reverbIn, noise, brown, hum: buildHum(master, reverbIn), water: buildWater(master, reverbIn, brown) };
+    nodes = {
+      master,
+      reverbIn,
+      noise,
+      brown,
+      hum: buildHum(master, reverbIn),
+      water: buildWater(master, reverbIn, brown),
+    };
+    nodes.threat = buildThreatVoice(master, reverbIn, brown);
     return true;
   }
 
@@ -195,6 +207,156 @@ export function createAudio(THREE, { fixtures, fixtureY, pools, waterY }) {
     o.stop(now + 0.15);
   }
 
+  // --- the presence ------------------------------------------------------
+  function buildThreatVoice(master, reverbIn, brown) {
+    const panner = makePanner({ ref: 1.6, rolloff: 1.25 });
+    panner.connect(master);
+    const send = ctx.createGain();
+    send.gain.value = 0.5;
+    panner.connect(send).connect(reverbIn);
+
+    // Breathing: band-passed noise, amplitude-modulated in update().
+    const src = ctx.createBufferSource();
+    src.buffer = brown;
+    src.loop = true;
+    src.playbackRate.value = 1.6;
+    const bp = ctx.createBiquadFilter();
+    bp.type = 'bandpass';
+    bp.frequency.value = 420;
+    bp.Q.value = 1.4;
+    const breath = ctx.createGain();
+    breath.gain.value = 0;
+    src.connect(bp).connect(breath).connect(panner);
+    src.start(0, 1.3);
+
+    // Low, slightly beating drone.
+    const drone = ctx.createGain();
+    drone.gain.value = 0;
+    for (const f of [41, 43.6, 82.5]) {
+      const o = ctx.createOscillator();
+      o.frequency.value = f;
+      o.connect(drone);
+      o.start();
+    }
+    drone.connect(panner);
+    return { panner, breath, drone };
+  }
+
+  function updateThreat(th, t) {
+    const v = nodes.threat;
+    const now = ctx.currentTime;
+    if (!th || !th.active) {
+      v.breath.gain.setTargetAtTime(0, now, 0.2);
+      v.drone.gain.setTargetAtTime(0, now, 0.2);
+      return;
+    }
+    setPos(v.panner, th.x, 1.9, th.z);
+    const chasing = th.mode === 'chase';
+    // Slow breathing; faster and louder when it hunts you.
+    const rate = chasing ? 0.75 : 0.3;
+    const cycle = Math.max(0, Math.sin(t * 2 * Math.PI * rate));
+    v.breath.gain.setTargetAtTime((chasing ? 0.9 : 0.45) * cycle * cycle, now, 0.08);
+    v.drone.gain.setTargetAtTime(chasing ? 0.22 : 0.12, now, 0.3);
+
+    if (th.step) playThreatStep(th.x, th.z, th.inWater);
+    if (th.chaseStart) playStinger();
+
+    // Crackling tubes near it.
+    let nearest = Infinity;
+    let fx = 0;
+    let fz = 0;
+    for (const f of fixtures) {
+      const d = Math.hypot(f.x - th.x, f.z - th.z);
+      if (d < nearest) {
+        nearest = d;
+        fx = f.x;
+        fz = f.z;
+      }
+    }
+    if (nearest < CRACKLE_RADIUS && Math.random() < 0.09 * (1 - nearest / CRACKLE_RADIUS)) {
+      playCrackle(fx, fz);
+    }
+  }
+
+  function oneShot(x, y, z, { ref = 1.5, rolloff = 1.2, wet = 0.6 } = {}) {
+    const panner = makePanner({ ref, rolloff });
+    setPos(panner, x, y, z);
+    panner.connect(nodes.master);
+    const send = ctx.createGain();
+    send.gain.value = wet;
+    panner.connect(send).connect(nodes.reverbIn);
+    return panner;
+  }
+
+  function playThreatStep(x, z, inWater) {
+    const now = ctx.currentTime;
+    const out = oneShot(x, 0.1, z, { wet: 0.8 });
+    const n = ctx.createBufferSource();
+    n.buffer = nodes.noise;
+    const lp = ctx.createBiquadFilter();
+    lp.type = 'lowpass';
+    lp.frequency.value = inWater ? 900 : 650;
+    const env = ctx.createGain();
+    env.gain.setValueAtTime(0, now);
+    env.gain.linearRampToValueAtTime(inWater ? 0.5 : 0.35, now + 0.02);
+    env.gain.setTargetAtTime(0, now + 0.02, inWater ? 0.12 : 0.06);
+    n.connect(lp).connect(env).connect(out);
+    n.start(now, Math.random() * 1.2, 0.6);
+    // Heavy, wet body of the step.
+    const o = ctx.createOscillator();
+    o.frequency.setValueAtTime(70, now);
+    o.frequency.exponentialRampToValueAtTime(38, now + 0.2);
+    const og = ctx.createGain();
+    og.gain.setValueAtTime(0, now);
+    og.gain.linearRampToValueAtTime(0.45, now + 0.015);
+    og.gain.setTargetAtTime(0, now + 0.015, 0.07);
+    o.connect(og).connect(out);
+    o.start(now);
+    o.stop(now + 0.5);
+  }
+
+  function playCrackle(x, z) {
+    const now = ctx.currentTime;
+    const out = oneShot(x, fixtureY, z, { ref: 1.2, wet: 0.3 });
+    const n = ctx.createBufferSource();
+    n.buffer = nodes.noise;
+    const hp = ctx.createBiquadFilter();
+    hp.type = 'highpass';
+    hp.frequency.value = 2500;
+    const env = ctx.createGain();
+    const len = 0.01 + Math.random() * 0.04;
+    env.gain.setValueAtTime(0.18, now);
+    env.gain.setValueAtTime(0, now + len);
+    n.connect(hp).connect(env).connect(out);
+    n.start(now, Math.random() * 1.5, len + 0.01);
+  }
+
+  // Dissonant swell when the presence starts chasing (non-positional).
+  function playStinger() {
+    const now = ctx.currentTime;
+    const out = ctx.createGain();
+    out.gain.setValueAtTime(0, now);
+    out.gain.linearRampToValueAtTime(0.16, now + 0.35);
+    out.gain.setTargetAtTime(0, now + 0.6, 0.8);
+    out.connect(nodes.master);
+    const send = ctx.createGain();
+    send.gain.value = 0.7;
+    out.connect(send).connect(nodes.reverbIn);
+    const lp = ctx.createBiquadFilter();
+    lp.type = 'lowpass';
+    lp.frequency.setValueAtTime(250, now);
+    lp.frequency.exponentialRampToValueAtTime(2200, now + 0.9);
+    lp.connect(out);
+    for (const f of [98, 103.8, 146.8, 155.6]) {
+      const o = ctx.createOscillator();
+      o.type = 'sawtooth';
+      o.frequency.value = f;
+      o.connect(lp);
+      o.start(now);
+      o.stop(now + 4);
+    }
+  }
+
   // --- footsteps ---------------------------------------------------------
   function playStep(inWater) {
     const now = ctx.currentTime;
@@ -269,6 +431,32 @@ export function createAudio(THREE, { fixtures, fixtureY, pools, waterY }) {
       if (!ctx && !build()) return;
       if (ctx.state === 'suspended') ctx.resume();
     },
+    /** The presence caught the player: a violent burst, then silence. */
+    caught() {
+      if (!ctx || ctx.state !== 'running') return;
+      const now = ctx.currentTime;
+      const out = ctx.createGain();
+      out.gain.setValueAtTime(0.9, now);
+      out.gain.setTargetAtTime(0, now + 0.15, 0.35);
+      out.connect(nodes.master);
+      out.connect(nodes.reverbIn);
+      const n = ctx.createBufferSource();
+      n.buffer = nodes.noise;
+      const lp = ctx.createBiquadFilter();
+      lp.type = 'lowpass';
+      lp.frequency.setValueAtTime(6000, now);
+      lp.frequency.exponentialRampToValueAtTime(150, now + 1.2);
+      n.connect(lp).connect(out);
+      n.start(now, 0, 1.5);
+      const o = ctx.createOscillator();
+      o.frequency.setValueAtTime(55, now);
+      o.frequency.exponentialRampToValueAtTime(28, now + 1.5);
+      o.connect(out);
+      o.start(now);
+      o.stop(now + 2);
+      // Everything else fades away.
+      nodes.master.gain.setTargetAtTime(0, now + 0.4, 0.6);
+    },
     toggleMute() {
       muted = !muted;
       if (ctx) nodes.master.gain.setTargetAtTime(muted ? 0 : MASTER_LEVEL, ctx.currentTime, 0.05);
@@ -279,8 +467,9 @@ export function createAudio(THREE, { fixtures, fixtureY, pools, waterY }) {
      * @param {number} dt seconds
      * @param {number} t  seconds
      * @param {{x:number,z:number}|null} drip drip that fell this frame
+     * @param {object|null} [threat] the presence's state + events (threat.js)
      */
-    update(camera, move, dt, t, drip) {
+    update(camera, move, dt, t, drip, threat = null) {
       if (!ctx || ctx.state !== 'running') return;
 
       // Listener = camera.
@@ -307,6 +496,7 @@ export function createAudio(THREE, { fixtures, fixtureY, pools, waterY }) {
       updateHum(p.x, p.z, t);
       updateWater(t);
       if (drip) playDrip(drip.x, drip.z);
+      updateThreat(threat, t);
 
       // Footsteps at a fixed cadence while moving.
       if (move.speed > 0.3) {

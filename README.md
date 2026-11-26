@@ -6,7 +6,9 @@ On WebGPU, the pools are an interactive wave simulation run in a compute shader:
 
 The sound is synthesized live with the Web Audio API (no audio files): fluorescent hum from the nearest fixtures, lapping water from each pool, a “plic” for each drip, and footsteps on tile or in water, all with a tiled-room echo.
 
-This is a local proof of concept. It is not a game, and it is not published on GitHub Pages or any other host.
+**You are not alone.** After a short grace period, a hostile presence starts roaming the rooms. It is almost invisible: a tall dark silhouette you glimpse in the haze, which fades when it gets close. You notice it through the world: fluorescent tubes flicker and crackle near it, you hear its breathing and its heavy wet steps, and on WebGPU it leaves ripples when it wades through a pool. It hears you walk (and hears you run or wade from much further away), and it chases you when it sees you. If it catches you, you wake up somewhere else: a new level with a new seed.
+
+This started as a renderer proof of concept and is now a small local game. It is not published on GitHub Pages or any other host.
 
 ## How to run
 
@@ -36,6 +38,8 @@ Versions are pinned exactly in `package.json` (no `^` / `~`). Use `npm ci` so th
 - Mouse — look around.
 - `W` `A` `S` `D` (or arrow keys) — move. Hold Shift to walk faster.
 - `M` — mute / unmute. Sound starts with the first click (browsers require a user gesture).
+- The presence only acts while you are in the scene (pointer locked); releasing the pointer pauses it.
+- Survival tips: running is faster than the presence but can be heard 16 m away; walking is heard at 6 m, wading at 10 m. In the water you are slower than it.
 - `Esc` — release the pointer.
 - Movement is blocked by walls. Step over a pool's curb to wade in: you sink to the pool floor and move slower. On WebGPU your movement makes ripples. There is no jump.
 
@@ -46,6 +50,8 @@ Versions are pinned exactly in `package.json` (no `^` / `~`). Use `npm ci` so th
 | `?seed=42` | Build the map from this seed. Numeric seeds are used as-is; any other string is hashed to a 32-bit seed. The same seed always produces the same layout and spawn point. If you omit it, a seed is generated and written into the URL. |
 | `?renderer=webgl` | Skip WebGPU detection and force `WebGLRenderer`, for a side-by-side comparison. |
 | `?water=sine` | On WebGPU, use the analytic sine-wave water instead of the compute simulation (same water as WebGL, for a like-for-like comparison). |
+| `?threat=off` | No hostile presence (exploration only). It is always off in benchmark mode. |
+| `?debug` | Shows the presence's state and distance in the HUD, and lets it act while the pointer is not locked (for headless tests). |
 | `?bench` / `?bench=30` | Benchmark mode: the camera follows a fixed tour of the map for 15 s (or the given number of seconds) after a 2 s warm-up, then the HUD shows average fps and frame-time percentiles. The tour is a function of time, so both renderers draw the same frames. |
 
 Examples:
@@ -125,7 +131,9 @@ What this shows:
 - First-person controls are implemented in this repo rather than `PointerLockControls`, so the same code can run with objects from either `three` or `three/webgpu` (those two entry points must not be mixed).
 - Tile textures are generated on a canvas at runtime; there are no image assets.
 - The caustics are a procedural pattern (plus, on WebGPU, a curvature-based focusing term), not ray-traced light transport. They are not offset by refraction.
-- Audio is synthesized and has no occlusion: walls do not muffle sounds from other rooms, only distance does.
+- Audio is synthesized and has no occlusion: walls do not muffle sounds from other rooms, only distance does. The presence's hearing has no occlusion either.
+- The presence moves along doorway-to-doorway paths and does not collide with the player or avoid pools. Its sight is a 2D line-of-sight test against the walls (no field of view: it notices you behind it too).
+- Being caught reloads the page with a new seed, so audio needs another click to restart.
 - There is no mobile touch path and no pointer-lock fallback beyond the on-screen hint.
 
 ## License

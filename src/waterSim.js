@@ -14,7 +14,7 @@
  *   The step rate is fixed (STEP_HZ) and independent of the frame rate.
  *
  * Disturbances
- *   - the player's wake while wading (position + speed from the controls),
+ *   - wakes of up to two waders (the player and the threat),
  *   - occasional drips from the ceiling (seeded, deterministic per map).
  *
  * Rendering
@@ -76,6 +76,7 @@ export async function createComputeWater(THREE, renderer, pools, look, drips) {
 
   // Disturbances, in grid units: (pool index, gx, gz, strength). pool < 0 = off.
   const uWake = uniform(new THREE.Vector4(-1, 0, 0, 0));
+  const uWake2 = uniform(new THREE.Vector4(-1, 0, 0, 0));
   const uDrip = uniform(new THREE.Vector4(-1, 0, 0, 0));
   const wakeRadius = float(WAKE_RADIUS / cell);
   const dripRadius = float(DRIP_RADIUS / cell);
@@ -110,6 +111,7 @@ export async function createComputeWater(THREE, renderer, pools, look, drips) {
       const gx = float(ix);
       const gz = float(iz);
       next.addAssign(splat(uWake, wakeRadius, poolF, gx, gz));
+      next.addAssign(splat(uWake2, wakeRadius, poolF, gx, gz));
       next.addAssign(splat(uDrip, dripRadius, poolF, gx, gz));
 
       prev.element(i).assign(next);
@@ -214,6 +216,15 @@ export async function createComputeWater(THREE, renderer, pools, look, drips) {
 
   // ---- per-frame driving ------------------------------------------------
   let acc = 0;
+  const setWake = (u, w, t, phase) => {
+    if (w && w.pool >= 0 && w.speed > 0.05) {
+      const g = toGrid(w.pool, w.x, w.z);
+      const s = WAKE_STRENGTH * Math.min(1, w.speed / 3) * Math.sin(2 * Math.PI * WAKE_HZ * t + phase);
+      u.value.set(w.pool, g.gx, g.gz, s);
+    } else {
+      u.value.set(-1, 0, 0, 0);
+    }
+  };
   const toGrid = (k, x, z) => ({
     gx: (x - (pools[k].cx - width / 2)) / cell,
     gz: (z - (pools[k].cz - width / 2)) / cell,
@@ -226,23 +237,19 @@ export async function createComputeWater(THREE, renderer, pools, look, drips) {
     /**
      * @param {number} t   seconds (drives the swell and the drip schedule)
      * @param {number} dt  frame delta, seconds
-     * @param {{x:number,z:number,speed:number,pool:number}|null} wader
+     * @param {{x:number,z:number,speed:number,pool:number}|null} wader  the player
+     * @param {{x:number,z:number,speed:number,pool:number}|null} [wader2] the threat
      * @returns {{pool:number,x:number,z:number}|null} the drip that fell this frame
      */
-    update(t, dt, wader) {
+    update(t, dt, wader, wader2 = null) {
       uTime.value = t;
       acc = Math.min(acc + Math.max(0, dt), MAX_PAIRS_PER_FRAME * 2 / STEP_HZ);
 
       const fell = drips.poll(t);
       let drip = fell ? { k: fell.pool, ...toGrid(fell.pool, fell.x, fell.z) } : null;
 
-      if (wader && wader.pool >= 0 && wader.speed > 0.05) {
-        const g = toGrid(wader.pool, wader.x, wader.z);
-        const s = WAKE_STRENGTH * Math.min(1, wader.speed / 3) * Math.sin(2 * Math.PI * WAKE_HZ * t);
-        uWake.value.set(wader.pool, g.gx, g.gz, s);
-      } else {
-        uWake.value.set(-1, 0, 0, 0);
-      }
+      setWake(uWake, wader, t, 0);
+      setWake(uWake2, wader2, t, 1.3); // different stride phase
 
       while (acc >= 2 / STEP_HZ) {
         acc -= 2 / STEP_HZ;

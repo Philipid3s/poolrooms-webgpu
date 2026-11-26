@@ -8,6 +8,7 @@ import { createBench, parseBenchParam } from './bench.js';
 import { createRoomLights } from './lights.js';
 import { applyCaustics } from './caustics.js';
 import { createAudio } from './audio.js';
+import { createThreat } from './threat.js';
 
 async function boot() {
   const params = new URLSearchParams(window.location.search);
@@ -73,8 +74,22 @@ async function boot() {
   const controls = createControls(camera, renderer.domElement, () => map.colliders, bench ? undefined : ground);
   controls.setPose(map.spawn.x, map.spawn.z, map.spawn.yaw);
 
+  // The hostile presence. Off in bench mode (keeps runs comparable) and with
+  // ?threat=off. ?debug shows its state in the HUD and lets it act while the
+  // pointer is not locked (headless tests).
+  const debug = params.has('debug');
+  const threat = !bench && params.get('threat') !== 'off'
+    ? createThreat(THREE, { map, scene, seed: seedInfo.seed })
+    : null;
+  let caught = false;
+
   // Small debug hook (console / headless tests).
-  window.__poolrooms = { THREE, renderer, scene, camera, controls, map, water, audio, kind };
+  window.__poolrooms = { THREE, renderer, scene, camera, controls, map, water, audio, threat, kind };
+
+  if (params.has('woke')) {
+    // We were caught in the previous level.
+    document.querySelector('#blocker h1').textContent = 'You wake up somewhere else.';
+  }
 
   const blocker = document.getElementById('blocker');
   if (bench) {
@@ -122,10 +137,21 @@ async function boot() {
       controls.update(dt);
     }
 
-    lights.update(camera.position.x, camera.position.z);
-    const drip = water.update(t, dt, wader(controls, map, camera));
+    // The presence only acts while you are in the scene (pointer locked).
+    let th = null;
+    if (threat) {
+      const player = { x: camera.position.x, z: camera.position.z, ...controls.state };
+      th = threat.update(controls.locked || debug ? dt : 0, t, player, camera);
+      if (th.caught && !caught && (controls.locked || debug)) {
+        caught = true;
+        onCaught(audio, controls);
+      }
+    }
+
+    lights.update(camera.position.x, camera.position.z, t, th?.active ? th : null);
+    const drip = water.update(t, dt, wader(controls, map, camera), th?.inWater ? th : null);
     caustics.update(t);
-    audio.update(camera, controls.state, dt, t, drip);
+    audio.update(camera, controls.state, dt, t, drip, th);
     renderer.render(scene, camera);
     overlay.tick(now);
 
@@ -138,13 +164,29 @@ async function boot() {
 
     if (++infoFrame % 30 === 0) {
       overlay.setInfo(
-        `Draw calls: ${drawCalls(renderer)} · lights: ${lights.activeCount}/${map.lightsAt.length}
-` +
-        `Water: ${water.label} · audio: ${audio.state}`,
+        `Draw calls: ${drawCalls(renderer)} · lights: ${lights.activeCount}/${map.lightsAt.length}\n` +
+        `Water: ${water.label} · audio: ${audio.state}` +
+        (debug && th ? `\nThreat: ${th.mode}, ${th.distance.toFixed(1)} m` : ''),
       );
     }
   });
 
+}
+
+/**
+ * Caught: violent sound, fade to black, then wake up in a new level
+ * (reload with a fresh seed; the renderer / water / threat params are kept).
+ */
+function onCaught(audio, controls) {
+  audio.caught();
+  document.getElementById('fade').classList.add('on');
+  setTimeout(() => {
+    controls.unlock();
+    const url = new URL(window.location.href);
+    url.searchParams.set('seed', String((Math.random() * 0xffffffff) >>> 0));
+    url.searchParams.set('woke', '1');
+    window.location.assign(url);
+  }, 2600);
 }
 
 const DRY = { y: 0, inWater: false };

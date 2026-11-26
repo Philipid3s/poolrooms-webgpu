@@ -48,6 +48,16 @@
         letter-spacing: 0.02em;
         margin-bottom: 10px;
       }
+      #fade {
+        position: fixed;
+        inset: 0;
+        background: #000;
+        opacity: 0;
+        pointer-events: none;
+        z-index: 20;
+        transition: opacity 1.8s ease-in;
+      }
+      #fade.on { opacity: 1; }
       #blocker p {
         font-size: 13px;
         opacity: 0.88;
@@ -57,13 +67,14 @@
   </head>
   <body>
     <div id="overlay">Initializing…</div>
+    <div id="fade"></div>
     <div id="blocker">
       <div>
         <h1>Poolrooms</h1>
         <p>
           Click to enter (pointer lock).<br />
           WASD to move · mouse to look · M to mute · Esc to release.<br />
-          Sound on: walk into the pools.
+          Sound on. Something else is here: keep moving, keep quiet.
         </p>
       </div>
     </div>
