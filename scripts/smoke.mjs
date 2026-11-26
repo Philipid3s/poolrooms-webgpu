@@ -5,14 +5,18 @@
  * Not a project dependency. Uses Playwright from the environment
  * (npx cache / a global install) and the system Chrome if present.
  *
+ * Works on Linux, macOS and Windows.
+ *
  * Usage (from the repo root, after `npm run build`):
- *   node scripts/smoke.mjs
+ *   npm run smoke        (or: node scripts/smoke.mjs)
  */
 import { spawn, execSync } from 'node:child_process';
 import { access, readdir } from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
+const isWindows = process.platform === 'win32';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const distIndex = path.join(root, 'dist', 'index.html');
 const screenshotPath = path.join(root, 'smoke.png');
@@ -44,9 +48,8 @@ try {
       '--enable-unsafe-swiftshader',
     ],
   };
-  if (await exists('/usr/bin/google-chrome')) {
-    launchOptions.executablePath = '/usr/bin/google-chrome';
-  }
+  const chrome = await findSystemChrome();
+  if (chrome) launchOptions.executablePath = chrome;
 
   browser = await playwright.chromium.launch(launchOptions);
   const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
@@ -135,7 +138,7 @@ async function loadPlaywright() {
   const candidates = ['playwright', 'playwright-core'];
   for (const name of candidates) {
     try {
-      return await import(name);
+      return unwrap(await import(name));
     } catch {
       // try the next candidate
     }
@@ -147,17 +150,27 @@ async function loadPlaywright() {
   } catch {
     // ignore
   }
-  roots.push(path.join(process.env.HOME || '', '.npm/_npx'));
+  // npx cache: ~/.npm/_npx on Linux/macOS, %LOCALAPPDATA%\npm-cache\_npx on Windows.
+  roots.push(path.join(os.homedir(), '.npm', '_npx'));
+  if (process.env.LOCALAPPDATA) {
+    roots.push(path.join(process.env.LOCALAPPDATA, 'npm-cache', '_npx'));
+  }
 
   for (const dir of roots) {
     const found = await findPackage(dir, 'playwright');
     if (found) {
-      return await import(pathToFileURL(path.join(found, 'index.js')).href);
+      return unwrap(await import(pathToFileURL(path.join(found, 'index.js')).href));
     }
   }
 
   console.error('Could not load Playwright. Install it globally or run via npx.');
   process.exit(1);
+}
+
+// Playwright is CommonJS; depending on how it is resolved, its API is either
+// on the module namespace or under `default`.
+function unwrap(mod) {
+  return mod?.chromium ? mod : mod?.default;
 }
 
 async function findPackage(start, name) {
@@ -186,13 +199,34 @@ async function findPackage(start, name) {
   return null;
 }
 
+async function findSystemChrome() {
+  const candidates = isWindows
+    ? [
+        process.env.PROGRAMFILES && path.join(process.env.PROGRAMFILES, 'Google/Chrome/Application/chrome.exe'),
+        process.env['PROGRAMFILES(X86)'] && path.join(process.env['PROGRAMFILES(X86)'], 'Google/Chrome/Application/chrome.exe'),
+        process.env.LOCALAPPDATA && path.join(process.env.LOCALAPPDATA, 'Google/Chrome/Application/chrome.exe'),
+      ]
+    : process.platform === 'darwin'
+      ? ['/Applications/Google Chrome.app/Contents/MacOS/Google Chrome']
+      : ['/usr/bin/google-chrome', '/usr/bin/google-chrome-stable'];
+  for (const p of candidates) {
+    if (p && (await exists(p))) return p;
+  }
+  return null; // let Playwright use its bundled Chromium
+}
+
 function startPreview(port) {
   return new Promise((resolve, reject) => {
-    const child = spawn('npm', ['run', 'preview', '--', '--host', '127.0.0.1', '--port', String(port)], {
+    // Run Vite's CLI directly with node: avoids `npm` (npm.cmd on Windows,
+    // which spawn() cannot run without a shell) and an extra process layer.
+    const viteBin = path.join(root, 'node_modules', 'vite', 'bin', 'vite.js');
+    const child = spawn(process.execPath, [viteBin, 'preview', '--host', '127.0.0.1', '--port', String(port), '--strictPort'], {
       cwd: root,
       stdio: ['ignore', 'pipe', 'pipe'],
       env: { ...process.env, BROWSER: 'none' },
-      detached: true,
+      // A process group lets us kill the whole tree on POSIX. On Windows,
+      // detached would open a new console window; taskkill /T handles the tree.
+      detached: !isWindows,
     });
     let settled = false;
     const onData = (buf) => {
@@ -218,21 +252,32 @@ function startPreview(port) {
 
 async function stopPreview(child, port) {
   if (child && child.pid) {
-    try {
-      process.kill(-child.pid, 'SIGTERM');
-    } catch {
+    if (isWindows) {
       try {
-        child.kill('SIGTERM');
+        execSync(`taskkill /pid ${child.pid} /T /F`, { stdio: 'ignore' });
       } catch {
         // already gone
+      }
+    } else {
+      try {
+        process.kill(-child.pid, 'SIGTERM');
+      } catch {
+        try {
+          child.kill('SIGTERM');
+        } catch {
+          // already gone
+        }
       }
     }
   }
   await sleep(400);
-  try {
-    execSync(`fuser -k ${port}/tcp`, { stdio: 'ignore' });
-  } catch {
-    // nothing bound
+  if (process.platform === 'linux') {
+    // Belt and braces: free the port if anything is still bound to it.
+    try {
+      execSync(`fuser -k ${port}/tcp`, { stdio: 'ignore' });
+    } catch {
+      // nothing bound, or fuser not installed
+    }
   }
   await sleep(200);
 }

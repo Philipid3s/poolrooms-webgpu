@@ -119,13 +119,8 @@ export function buildMap(THREE, seed) {
 
   addCeiling(THREE, group, ceilMat, ceilTex);
 
-  const spawnRoom = { i: Math.floor(GRID_W / 2), j: Math.floor(GRID_H / 2) };
-  // Prefer a non-pool room near the center for a dry start.
-  let spawn = spawnRoom;
-  if (poolRooms.some((p) => p.i === spawn.i && p.j === spawn.j)) {
-    const dry = firstDryRoom(poolRooms);
-    if (dry) spawn = dry;
-  }
+  // Start in the dry room closest to the center of the grid.
+  const spawn = nearestDryRoom(poolRooms, Math.floor(GRID_W / 2), Math.floor(GRID_H / 2));
 
   return {
     group,
@@ -154,13 +149,22 @@ function allRoomCenters() {
   return out;
 }
 
-function firstDryRoom(poolRooms) {
+function nearestDryRoom(poolRooms, ci, cj) {
+  // Deterministic: scan in row-major order and keep the first room at the
+  // smallest squared distance, so ties always resolve the same way.
+  let best = { i: ci, j: cj };
+  let bestD = Infinity;
   for (let j = 0; j < GRID_H; j++) {
     for (let i = 0; i < GRID_W; i++) {
-      if (!poolRooms.some((p) => p.i === i && p.j === j)) return { i, j };
+      if (poolRooms.some((p) => p.i === i && p.j === j)) continue;
+      const d = (i - ci) ** 2 + (j - cj) ** 2;
+      if (d < bestD) {
+        bestD = d;
+        best = { i, j };
+      }
     }
   }
-  return null;
+  return best;
 }
 
 function carveMaze(rng, hDoors, vDoors) {
@@ -249,6 +253,26 @@ function addRoomFloor(THREE, group, floorMat, poolBottomMat, curbMat, colliders,
   const bottom = new THREE.Mesh(new THREE.BoxGeometry(opening, 0.08, opening), poolBottomMat);
   bottom.position.set(cx, -0.82, cz);
   group.add(bottom);
+
+  // Pit side walls, from the pool bottom up to the underside of the deck,
+  // so you cannot see under the deck through the water.
+  const pitT = 0.08;
+  const pitTop = -0.08; // underside of the deck slab (no coplanar overlap)
+  const pitBottom = -0.86;
+  const pitH = pitTop - pitBottom;
+  const pitY = (pitTop + pitBottom) / 2;
+  const half2 = opening / 2 + pitT / 2;
+  const pitWalls = [
+    { w: opening + pitT * 2, d: pitT, x: cx, z: cz - half2 },
+    { w: opening + pitT * 2, d: pitT, x: cx, z: cz + half2 },
+    { w: pitT, d: opening, x: cx - half2, z: cz },
+    { w: pitT, d: opening, x: cx + half2, z: cz },
+  ];
+  for (const p of pitWalls) {
+    const mesh = new THREE.Mesh(new THREE.BoxGeometry(p.w, pitH, p.d), poolBottomMat);
+    mesh.position.set(p.x, pitY, p.z);
+    group.add(mesh);
+  }
 
   // Thin curb around the pool edge so the drop is readable; also used as collision.
   const curbH = 0.16;

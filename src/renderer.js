@@ -41,12 +41,26 @@ export async function createRenderer(canvasParent = document.body) {
   const useWebGPU = !forced && detection.supported;
 
   if (useWebGPU) {
-    const THREE = await import('three/webgpu');
-    const renderer = new THREE.WebGPURenderer({ antialias: true });
-    await renderer.init();
-    configureRenderer(THREE, renderer);
-    canvasParent.appendChild(renderer.domElement);
-    return { THREE, renderer, kind: 'WebGPU', detection, forced };
+    let renderer;
+    try {
+      const THREE = await import('three/webgpu');
+      renderer = new THREE.WebGPURenderer({ antialias: true });
+      await renderer.init();
+      configureRenderer(THREE, renderer);
+      canvasParent.appendChild(renderer.domElement);
+      return { THREE, renderer, kind: 'WebGPU', detection, forced };
+    } catch (err) {
+      // An adapter was found but device/renderer setup failed: fall back.
+      console.warn('WebGPU renderer init failed, falling back to WebGL:', err);
+      try {
+        renderer?.dispose();
+      } catch {
+        // ignore; we are abandoning this renderer anyway
+      }
+      renderer?.domElement?.remove();
+      detection.supported = false;
+      detection.reason = `WebGPU init failed: ${err?.message || err}`;
+    }
   }
 
   const THREE = await import('three');

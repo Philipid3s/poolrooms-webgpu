@@ -16,15 +16,12 @@ export function createControls(camera, domElement, getColliders) {
   let pitch = 0;
   let locked = false;
 
-  const euler = { x: 0, y: 0, z: 0 };
-  // Reuse a scratch object; we set camera quaternion from yaw/pitch each frame.
+  // Scratch vectors, reused every frame.
   const _forward = { x: 0, z: 0 };
   const _right = { x: 0, z: 0 };
 
   function applyLook() {
     pitch = Math.max(-PITCH_LIMIT, Math.min(PITCH_LIMIT, pitch));
-    euler.y = yaw;
-    euler.x = pitch;
     // YXZ: look around, then pitch.
     const cy = Math.cos(yaw * 0.5);
     const sy = Math.sin(yaw * 0.5);
@@ -53,12 +50,24 @@ export function createControls(camera, domElement, getColliders) {
     keys.delete(event.code);
   }
 
+  // keyup never fires if focus or pointer lock is lost mid-press, so
+  // drop every held key whenever that happens.
+  function releaseKeys() {
+    keys.clear();
+  }
+
   function onPointerLockChange() {
     locked = document.pointerLockElement === domElement;
+    if (!locked) releaseKeys();
   }
 
   function onPointerLockError() {
     locked = false;
+    releaseKeys();
+  }
+
+  function onVisibilityChange() {
+    if (document.hidden) releaseKeys();
   }
 
   document.addEventListener('pointerlockchange', onPointerLockChange);
@@ -66,6 +75,8 @@ export function createControls(camera, domElement, getColliders) {
   document.addEventListener('mousemove', onMouseMove);
   document.addEventListener('keydown', onKeyDown);
   document.addEventListener('keyup', onKeyUp);
+  document.addEventListener('visibilitychange', onVisibilityChange);
+  window.addEventListener('blur', releaseKeys);
 
   applyLook();
   camera.position.y = EYE_HEIGHT;
@@ -93,7 +104,8 @@ export function createControls(camera, domElement, getColliders) {
       applyLook();
     },
     update(dt) {
-      if (dt <= 0 || dt > 0.25) return;
+      // Only move while the pointer is locked (i.e. the player is "in" the scene).
+      if (!locked || dt <= 0 || dt > 0.25) return;
       let ax = 0;
       let az = 0;
       if (keys.has('KeyW') || keys.has('ArrowUp')) az += 1;
@@ -129,6 +141,8 @@ export function createControls(camera, domElement, getColliders) {
       document.removeEventListener('mousemove', onMouseMove);
       document.removeEventListener('keydown', onKeyDown);
       document.removeEventListener('keyup', onKeyUp);
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+      window.removeEventListener('blur', releaseKeys);
     },
   };
 }

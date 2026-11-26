@@ -29,11 +29,3 @@ export function mulberry32(seed) {
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
 }
-
-export function randInt(rng, min, maxInclusive) {
-  return min + Math.floor(rng() * (maxInclusive - min + 1));
-}
-
-export function choice(rng, arr) {
-  return arr[Math.floor(rng() * arr.length)];
-}

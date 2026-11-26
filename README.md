@@ -50,7 +50,7 @@ The HUD shows the active renderer (`WebGPU` or `WebGL`), a live FPS counter, the
 
 ## Scope
 
-**In scope:** Vite + three.js skeleton, WebGPU detection (`navigator.gpu` + `requestAdapter()`), automatic WebGL fallback, seeded procedural rooms, a simple animated water shader (TSL / node material on the WebGPU path, a small GLSL `ShaderMaterial` on the WebGL path), basic lighting, first-person controls, cheap wall collision, FPS overlay.
+**In scope:** Vite + three.js skeleton, WebGPU detection (`navigator.gpu` + `requestAdapter()`), automatic WebGL fallback (also used if WebGPU renderer initialisation fails), seeded procedural rooms, a simple animated water shader (a lit TSL node material on the WebGPU path; a `MeshStandardMaterial` with GLSL patched in via `onBeforeCompile` on the WebGL path), basic lighting, first-person controls, cheap wall collision, FPS overlay.
 
 **Out of scope:** Nanite-style geometry, global illumination, imported assets, multiplayer, LLMs, GitHub Pages, and any other deploy.
 
@@ -86,7 +86,7 @@ A reasonable comparison is `?seed=42` vs `?seed=42&renderer=webgl` on the same m
 - First-person controls are implemented in this repo rather than `PointerLockControls`, so the same code can run with objects from either `three` or `three/webgpu` (those two entry points must not be mixed).
 - Tile textures are generated on a canvas at runtime; there are no image assets.
 - There is no audio, no mobile touch path, and no pointer-lock fallback beyond the on-screen hint.
-- A `scripts/smoke.mjs` helper exists for a headless WebGL check. Playwright is not a project dependency; the script uses an environment install of Playwright plus the system Chrome when present.
+- `npm run smoke` (after `npm run build`) runs `scripts/smoke.mjs`, a headless WebGL check that works on Linux, macOS and Windows. Playwright is not a project dependency; the script uses an environment install of Playwright (global or npx cache) plus the system Chrome when present.
 
 ## License
 
