@@ -11,6 +11,7 @@
 
 import { ROOM_SIZE, POOL_MARGIN, WATER_Y } from './map.js';
 import { createComputeWater } from './waterSim.js';
+import { createDripScheduler } from './drips.js';
 
 const COLOR_DEEP = 0x1c4d4f;
 const COLOR_SHALLOW = 0x4f8a86;
@@ -20,12 +21,14 @@ const COLOR_SHALLOW = 0x4f8a86;
  * @param {'WebGPU'|'WebGL'} rendererKind
  * @param {{cx:number,cz:number,half:number}[]} pools
  * @param {{renderer:object, mode:'sim'|'sine', seed:number}} opts
- * @returns {Promise<{group:object, label:string, update(t:number, dt:number, wader?:object):void, splash?:Function}>}
+ * @returns {Promise<{group:object, label:string, update(t:number, dt:number, wader?:object):(object|null), splash?:Function}>}
+ *   update() returns the drip that fell this frame ({pool, x, z}) or null.
  */
 export async function createWater(THREE, rendererKind, pools, { renderer, mode = 'sim', seed = 0 } = {}) {
+  const drips = createDripScheduler(pools, seed);
   if (rendererKind === 'WebGPU' && mode === 'sim') {
     try {
-      return await createComputeWater(THREE, renderer, pools, LOOK, seed);
+      return await createComputeWater(THREE, renderer, pools, LOOK, drips);
     } catch (err) {
       console.warn('Compute water failed, falling back to sine water:', err);
     }
@@ -36,7 +39,7 @@ export async function createWater(THREE, rendererKind, pools, { renderer, mode =
   const width = ROOM_SIZE - POOL_MARGIN * 2 - 0.12;
   const material = await makeWaterMaterial(THREE, rendererKind);
   const label = rendererKind === 'WebGPU' ? 'sine (TSL)' : 'sine (GLSL)';
-  if (!material) return { group, label: 'none', update() {} };
+  if (!material) return { group, label: 'none', update: (t) => drips.poll(t) };
 
   for (const pool of pools) {
     const geo = new THREE.PlaneGeometry(width, width, 48, 48);
@@ -54,6 +57,8 @@ export async function createWater(THREE, rendererKind, pools, { renderer, mode =
       if (typeof material.userData.update === 'function') {
         material.userData.update(timeSec);
       }
+      // No ripples here, but drips still fall (for the audio).
+      return drips.poll(timeSec);
     },
   };
 }

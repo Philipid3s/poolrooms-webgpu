@@ -2,7 +2,9 @@
 
 A small first-person “poolrooms” scene in the browser: tiled rooms on a seeded grid and shallow indoor pools you can wade into. The app uses three.js `WebGPURenderer` when the browser exposes a WebGPU adapter, and falls back to `WebGLRenderer` automatically. You can also force the fallback to compare the two paths.
 
-On WebGPU, the pools are an interactive wave simulation run in a compute shader: wading through them leaves a wake, and drips from the ceiling make rings that bounce off the pool walls. WebGL keeps simple analytic sine-wave water.
+On WebGPU, the pools are an interactive wave simulation run in a compute shader: wading through them leaves a wake, and drips from the ceiling make rings that bounce off the pool walls. The ripples also focus light onto the pool floor as moving caustics. WebGL keeps simple analytic sine-wave water with the same procedural caustic pattern.
+
+The sound is synthesized live with the Web Audio API (no audio files): fluorescent hum from the nearest fixtures, lapping water from each pool, a “plic” for each drip, and footsteps on tile or in water, all with a tiled-room echo.
 
 This is a local proof of concept. It is not a game, and it is not published on GitHub Pages or any other host.
 
@@ -33,6 +35,7 @@ Versions are pinned exactly in `package.json` (no `^` / `~`). Use `npm ci` so th
 - Click the scene to lock the pointer.
 - Mouse — look around.
 - `W` `A` `S` `D` (or arrow keys) — move. Hold Shift to walk faster.
+- `M` — mute / unmute. Sound starts with the first click (browsers require a user gesture).
 - `Esc` — release the pointer.
 - Movement is blocked by walls. Step over a pool's curb to wade in: you sink to the pool floor and move slower. On WebGPU your movement makes ripples. There is no jump.
 
@@ -68,7 +71,7 @@ When benchmarking by hand in a normal browser, the frame rate is capped at the d
 
 ## Scope
 
-**In scope:** Vite + three.js skeleton, WebGPU detection (`navigator.gpu` + `requestAdapter()`), automatic WebGL fallback (also used if WebGPU renderer initialisation fails), seeded procedural rooms, a compute-shader water simulation on WebGPU (TSL), simple animated sine-wave water as the fallback (a lit TSL node material on WebGPU with `?water=sine`; a `MeshStandardMaterial` with GLSL patched in via `onBeforeCompile` on WebGL), basic lighting, first-person controls with wading, cheap wall collision, FPS overlay, benchmark mode.
+**In scope:** Vite + three.js skeleton, WebGPU detection (`navigator.gpu` + `requestAdapter()`), automatic WebGL fallback (also used if WebGPU renderer initialisation fails), seeded procedural rooms, a compute-shader water simulation on WebGPU (TSL), simple animated sine-wave water as the fallback (a lit TSL node material on WebGPU with `?water=sine`; a `MeshStandardMaterial` with GLSL patched in via `onBeforeCompile` on WebGL), basic lighting, first-person controls with wading, cheap wall collision, FPS overlay, benchmark mode, procedural caustics (driven by the simulated surface on WebGPU), procedural spatial audio.
 
 **Out of scope:** Nanite-style geometry, global illumination, imported assets, multiplayer, LLMs, GitHub Pages, and any other deploy.
 
@@ -88,11 +91,16 @@ Only numbers that were actually measured are listed. A discrete desktop GPU has 
 | Before optimisation (25 point lights, one mesh and material per wall) | 204–210 (4.8–4.9) | 282–287 (3.5) | ~88 |
 | Merged static geometry + 9 nearest lights, `?water=sine` | 428–430 (2.3) | 602–654 (1.5–1.7) | 12–13 |
 | Same, WebGPU with the compute water simulation (default) | 374–375 (2.7) | 586–634 (1.6–1.7) | 9 (+ compute) |
+| + caustics on the pool floor, `?water=sine` | 414–419 (2.4) | 592* (1.7) | 12–13 |
+| + caustics, default (WebGPU caustics follow the simulated ripples) | 353–362 (2.8) | 571–585 (1.7–1.8) | 9 (+ compute) |
+
+\* One of the two WebGL runs in that row was an outlier at 412 fps; the other runs of the same build were 571–592.
 
 What this shows:
 
 - The two optimisations roughly **doubled** the frame rate on both renderers.
 - The compute water (7 pools × 128² cells, 120 steps/s, plus a 115k-vertex displaced mesh) costs about **0.35 ms per frame** on this GPU.
+- Caustics cost about 0.1 ms per frame on WebGPU, and slightly more when they sample the simulation (about 20 storage reads per pool-floor pixel). Audio is not active during benchmarks.
 - On this integrated GPU, at these very short frame times, **WebGL is faster than WebGPU** (about 1.5 ms vs 2.3 ms per frame with the same water). The scene is light, so this probably reflects per-frame CPU overhead in each renderer more than GPU work (not profiled). A heavier scene or a discrete GPU may give a different picture.
 
 ### Environment: the Linux box (no usable GPU), 2026-11-12
@@ -116,7 +124,9 @@ What this shows:
 - Only the 9 lights nearest the camera are active. They fade out between 12 m and 18 m, so rooms seen far away through several doorways are lit only by the ambient fill.
 - First-person controls are implemented in this repo rather than `PointerLockControls`, so the same code can run with objects from either `three` or `three/webgpu` (those two entry points must not be mixed).
 - Tile textures are generated on a canvas at runtime; there are no image assets.
-- There is no audio, no mobile touch path, and no pointer-lock fallback beyond the on-screen hint.
+- The caustics are a procedural pattern (plus, on WebGPU, a curvature-based focusing term), not ray-traced light transport. They are not offset by refraction.
+- Audio is synthesized and has no occlusion: walls do not muffle sounds from other rooms, only distance does.
+- There is no mobile touch path and no pointer-lock fallback beyond the on-screen hint.
 
 ## License
 

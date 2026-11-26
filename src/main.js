@@ -1,11 +1,13 @@
 import { parseSeed } from './rng.js';
 import { createRenderer } from './renderer.js';
-import { buildMap, poolAt, WALL_HEIGHT, POOL_FLOOR_Y } from './map.js';
+import { buildMap, poolAt, WALL_HEIGHT, POOL_FLOOR_Y, WATER_Y } from './map.js';
 import { createWater } from './water.js';
 import { createControls } from './controls.js';
 import { createOverlay } from './overlay.js';
 import { createBench, parseBenchParam } from './bench.js';
 import { createRoomLights } from './lights.js';
+import { applyCaustics } from './caustics.js';
+import { createAudio } from './audio.js';
 
 async function boot() {
   const params = new URLSearchParams(window.location.search);
@@ -54,6 +56,14 @@ async function boot() {
   const water = await createWater(THREE, kind, map.pools, { renderer, mode: waterMode, seed: seedInfo.seed });
   scene.add(water.group);
 
+  const caustics = await applyCaustics(THREE, kind, map.materials.pool, { waterY: WATER_Y, focusAt: water.focusAt });
+  const audio = createAudio(THREE, {
+    fixtures: map.lightsAt,
+    fixtureY: WALL_HEIGHT - 0.12,
+    pools: map.pools,
+    waterY: WATER_Y,
+  });
+
   const benchSeconds = parseBenchParam(params);
   const bench = benchSeconds ? createBench({ seconds: benchSeconds, map }) : null;
 
@@ -64,13 +74,19 @@ async function boot() {
   controls.setPose(map.spawn.x, map.spawn.z, map.spawn.yaw);
 
   // Small debug hook (console / headless tests).
-  window.__poolrooms = { THREE, renderer, scene, camera, controls, map, water, kind };
+  window.__poolrooms = { THREE, renderer, scene, camera, controls, map, water, audio, kind };
 
   const blocker = document.getElementById('blocker');
   if (bench) {
     blocker.classList.add('hidden');
   } else {
-    blocker.addEventListener('click', () => controls.lock());
+    blocker.addEventListener('click', () => {
+      audio.start(); // needs a user gesture
+      controls.lock();
+    });
+    document.addEventListener('keydown', (e) => {
+      if (e.code === 'KeyM') audio.toggleMute();
+    });
     document.addEventListener('pointerlockchange', () => {
       if (controls.locked) blocker.classList.add('hidden');
       else blocker.classList.remove('hidden');
@@ -107,7 +123,9 @@ async function boot() {
     }
 
     lights.update(camera.position.x, camera.position.z);
-    water.update(t, dt, wader(controls, map, camera));
+    const drip = water.update(t, dt, wader(controls, map, camera));
+    caustics.update(t);
+    audio.update(camera, controls.state, dt, t, drip);
     renderer.render(scene, camera);
     overlay.tick(now);
 
@@ -122,7 +140,7 @@ async function boot() {
       overlay.setInfo(
         `Draw calls: ${drawCalls(renderer)} · lights: ${lights.activeCount}/${map.lightsAt.length}
 ` +
-        `Water: ${water.label}`,
+        `Water: ${water.label} · audio: ${audio.state}`,
       );
     }
   });

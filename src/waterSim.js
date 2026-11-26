@@ -25,8 +25,7 @@
  *   surface is never perfectly flat.
  */
 
-import { WATER_Y } from './map.js';
-import { mulberry32 } from './rng.js';
+import { WATER_Y, ROOM_SIZE, GRID_W, GRID_H } from './map.js';
 
 export const GRID = 128; // cells per pool side
 const STEP_HZ = 120; // simulation steps per second (run in pairs)
@@ -39,7 +38,8 @@ const WAKE_HZ = 1.8; // the wake pulses (stride rhythm) so it emits rings
 const DRIP_RADIUS = 0.22;
 const DRIP_STRENGTH = -0.06;
 const NORMAL_GAIN = 2.5; // visual exaggeration of ripple slopes
-const DRIP_INTERVAL = [0.6, 2.2]; // seconds between drips (all pools)
+const FOCUS_GAIN = 0.3; // caustic focusing: intensity = 1 / (1 + FOCUS_GAIN * laplacian)
+const FOCUS_STENCIL = 2; // cells; a wider Laplacian stencil gives smoother light rings
 const EDGE_INSET = 0.06; // gap between the water mesh and the pool wall
 
 // Same ambient swell as the plain water (see water.js).
@@ -50,14 +50,14 @@ const W = { a1: 0.035, k1: 0.85, w1: 1.15, a2: 0.022, k2: 0.7, w2: 0.9 };
  * @param {object} renderer WebGPURenderer
  * @param {{cx:number,cz:number,half:number}[]} pools
  * @param {object} look shared colours / opacity
- * @param {number} seed map seed (drip schedule)
+ * @param {{poll(t:number):({pool:number,x:number,z:number}|null)}} drips
  */
-export async function createComputeWater(THREE, renderer, pools, look, seed) {
+export async function createComputeWater(THREE, renderer, pools, look, drips) {
   const tsl = await import('three/tsl');
   const {
     Fn, instanceIndex, vertexIndex, instancedArray, storage, uniform, int, float, vec2, vec3,
     select, max, min, mix, color, sin, cos, varying, positionLocal, transformNormalToView,
-    normalView, positionViewDirection,
+    normalView, positionViewDirection, uniformArray,
   } = tsl;
 
   const group = new THREE.Group();
@@ -172,6 +172,40 @@ export async function createComputeWater(THREE, renderer, pools, look, seed) {
   const fresnel = float(1).sub(ndv).pow(3);
   material.opacityNode = mix(float(look.opacity), float(look.opacityGrazing), fresnel);
 
+  // ---- caustic focusing (used by caustics.js on the pool material) -------
+  // Room grid -> pool index (-1 = no pool), to find the sim cell under a
+  // world position in a fragment shader.
+  const table = new Array(GRID_W * GRID_H).fill(-1);
+  pools.forEach((p, k) => {
+    table[p.j * GRID_W + p.i] = k;
+  });
+  const poolTable = uniformArray(table, 'float');
+  const focusAt = (px, pz) => {
+    const gi = min(max(int(px.div(ROOM_SIZE).round()), int(0)), int(GRID_W - 1));
+    const gj = min(max(int(pz.div(ROOM_SIZE).round()), int(0)), int(GRID_H - 1));
+    const k = poolTable.element(gj.mul(GRID_W).add(gi));
+    const base = int(max(k, 0)).mul(PER);
+    // Continuous grid coordinates; the Laplacian is bilinearly interpolated
+    // between the four surrounding cells (nearest-cell sampling shows blocks).
+    const fxc = px.sub(float(gi).mul(ROOM_SIZE).sub(width / 2)).div(cell);
+    const fzc = pz.sub(float(gj).mul(ROOM_SIZE).sub(width / 2)).div(cell);
+    const gx = int(fxc.floor());
+    const gz = int(fzc.floor());
+    const tx = fxc.fract();
+    const tz = fzc.fract();
+    const s = FOCUS_STENCIL;
+    const at = (x, z) => heights.element(cellIndex(base, x, z));
+    const lapAt = (x, z) =>
+      at(x.add(s), z).add(at(x.sub(s), z)).add(at(x, z.add(s))).add(at(x, z.sub(s))).sub(at(x, z).mul(4));
+    const lap = mix(
+      mix(lapAt(gx, gz), lapAt(gx.add(1), gz), tx),
+      mix(lapAt(gx, gz.add(1)), lapAt(gx.add(1), gz.add(1)), tx),
+      tz,
+    ).div((s * cell) ** 2);
+    const focus = float(1).div(max(float(1).add(lap.mul(FOCUS_GAIN)), 0.3)).clamp(0, 3);
+    return select(k.greaterThanEqual(0), focus, float(1));
+  };
+
   const mesh = new THREE.Mesh(geometry, material);
   mesh.name = 'water-sim';
   mesh.renderOrder = 1;
@@ -179,9 +213,7 @@ export async function createComputeWater(THREE, renderer, pools, look, seed) {
   group.add(mesh);
 
   // ---- per-frame driving ------------------------------------------------
-  const rng = mulberry32((seed ^ 0x5eed) >>> 0);
   let acc = 0;
-  let nextDrip = 0.5;
   const toGrid = (k, x, z) => ({
     gx: (x - (pools[k].cx - width / 2)) / cell,
     gz: (z - (pools[k].cz - width / 2)) / cell,
@@ -190,25 +222,19 @@ export async function createComputeWater(THREE, renderer, pools, look, seed) {
   return {
     group,
     label: `compute sim ${pools.length}x${N}² @ ${STEP_HZ} Hz`,
+    focusAt,
     /**
      * @param {number} t   seconds (drives the swell and the drip schedule)
      * @param {number} dt  frame delta, seconds
      * @param {{x:number,z:number,speed:number,pool:number}|null} wader
+     * @returns {{pool:number,x:number,z:number}|null} the drip that fell this frame
      */
     update(t, dt, wader) {
       uTime.value = t;
       acc = Math.min(acc + Math.max(0, dt), MAX_PAIRS_PER_FRAME * 2 / STEP_HZ);
 
-      let drip = null;
-      if (t >= nextDrip) {
-        const k = Math.floor(rng() * pools.length);
-        const span = width / 2 - 0.3;
-        drip = {
-          k,
-          ...toGrid(k, pools[k].cx + (rng() * 2 - 1) * span, pools[k].cz + (rng() * 2 - 1) * span),
-        };
-        nextDrip = t + DRIP_INTERVAL[0] + rng() * (DRIP_INTERVAL[1] - DRIP_INTERVAL[0]);
-      }
+      const fell = drips.poll(t);
+      let drip = fell ? { k: fell.pool, ...toGrid(fell.pool, fell.x, fell.z) } : null;
 
       if (wader && wader.pool >= 0 && wader.speed > 0.05) {
         const g = toGrid(wader.pool, wader.x, wader.z);
@@ -230,6 +256,7 @@ export async function createComputeWater(THREE, renderer, pools, look, seed) {
         drip = null; // a drip is applied once
         renderer.compute(stepBA);
       }
+      return fell;
     },
     /** Debug / test hook: read back simulation heights (A, latest). */
     async readHeights() {

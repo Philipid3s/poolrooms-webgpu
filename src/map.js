@@ -66,7 +66,9 @@ export function buildMap(THREE, seed) {
     roughness: 0.45,
     metalness: 0.0,
   });
-  const poolBottomMat = new THREE.MeshStandardMaterial({
+  // Node material on WebGPU so caustics can be attached (caustics.js).
+  const PoolMaterial = THREE.MeshStandardNodeMaterial ?? THREE.MeshStandardMaterial;
+  const poolBottomMat = new PoolMaterial({
     color: 0x6e8a6a,
     roughness: 0.55,
     metalness: 0.05,
@@ -158,6 +160,7 @@ export function buildMap(THREE, seed) {
     poolRooms,
     lightsAt: allRoomCenters(),
     pools: poolRooms.map((p) => ({ ...p, cx: roomCenterX(p.i), cz: roomCenterZ(p.j), half: POOL_HALF })),
+    materials: { pool: poolBottomMat },
     // hDoors[j][i]: opening between (i, j) and (i + 1, j).
     // vDoors[j][i]: opening between (i, j) and (i, j + 1).
     doors: { h: hDoors, v: vDoors },
