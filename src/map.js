@@ -5,6 +5,7 @@
 
 import { mulberry32 } from './rng.js';
 import { createTileTexture } from './tiles.js';
+import { createBoxBatch } from './boxbatch.js';
 
 export const ROOM_SIZE = 12;
 export const WALL_HEIGHT = 4.4;
@@ -14,6 +15,11 @@ export const DOOR_HEIGHT = 3.15;
 export const GRID_W = 5;
 export const GRID_H = 5;
 export const POOL_MARGIN = 1.55;
+export const POOL_BOTTOM = -0.86; // underside of the pool floor slab (its top is at -0.78)
+export const POOL_FLOOR_Y = POOL_BOTTOM + 0.08; // walkable pool floor
+export const WATER_Y = -0.28; // still water surface
+export const POOL_HALF = (ROOM_SIZE - POOL_MARGIN * 2) / 2; // half-size of the pool opening
+export const TILE_METERS = 2; // one texture repeat = 2 m (8 tiles of 25 cm)
 
 /**
  * @returns {{
@@ -21,6 +27,7 @@ export const POOL_MARGIN = 1.55;
  *   colliders: {minX:number,maxX:number,minZ:number,maxZ:number}[],
  *   spawn: {x:number,z:number,yaw:number},
  *   poolRooms: {i:number,j:number}[],
+ *   pools: {i:number,j:number,cx:number,cz:number,half:number}[],
  * }}
  */
 export function buildMap(THREE, seed) {
@@ -29,11 +36,12 @@ export function buildMap(THREE, seed) {
   group.name = 'poolrooms-map';
   const colliders = [];
 
+  // Floors and walls use world-space UVs (1 repeat per TILE_METERS), so the
+  // textures need no per-mesh repeat.
   const floorTex = createTileTexture(THREE, { hue: 44, variation: 12, grout: '#c4b06c' });
-  floorTex.repeat.set(ROOM_SIZE / 2, ROOM_SIZE / 2);
   const wallTex = createTileTexture(THREE, { hue: 46, variation: 9, grout: '#d2c086' });
   const ceilTex = createTileTexture(THREE, { hue: 42, variation: 6, grout: '#cbb887' });
-  ceilTex.repeat.set((GRID_W * ROOM_SIZE) / 2, (GRID_H * ROOM_SIZE) / 2);
+  ceilTex.repeat.set((GRID_W * ROOM_SIZE) / TILE_METERS, (GRID_H * ROOM_SIZE) / TILE_METERS);
 
   const floorMat = new THREE.MeshStandardMaterial({
     map: floorTex,
@@ -72,12 +80,19 @@ export function buildMap(THREE, seed) {
 
   const poolRooms = pickPoolRooms(rng);
 
+  const batches = {
+    floor: createBoxBatch(TILE_METERS),
+    wall: createBoxBatch(TILE_METERS),
+    curb: createBoxBatch(TILE_METERS),
+    pool: createBoxBatch(TILE_METERS),
+  };
+
   for (let j = 0; j < GRID_H; j++) {
     for (let i = 0; i < GRID_W; i++) {
       const cx = roomCenterX(i);
       const cz = roomCenterZ(j);
       const isPool = poolRooms.some((p) => p.i === i && p.j === j);
-      addRoomFloor(THREE, group, floorMat, poolBottomMat, curbMat, colliders, cx, cz, isPool);
+      addRoomFloor(batches, cx, cz, isPool);
     }
   }
 
@@ -89,7 +104,7 @@ export function buildMap(THREE, seed) {
       const z1 = z0 + ROOM_SIZE;
       const isOuter = e === 0 || e === GRID_W;
       const open = !isOuter && hDoors[j][e - 1];
-      addWallWithDoor(THREE, group, wallMat, wallTex, colliders, {
+      addWallWithDoor(batches.wall, colliders, {
         axis: 'z',
         a: x,
         b0: z0,
@@ -107,7 +122,7 @@ export function buildMap(THREE, seed) {
       const x1 = x0 + ROOM_SIZE;
       const isOuter = e === 0 || e === GRID_H;
       const open = !isOuter && vDoors[e - 1][i];
-      addWallWithDoor(THREE, group, wallMat, wallTex, colliders, {
+      addWallWithDoor(batches.wall, colliders, {
         axis: 'x',
         a: z,
         b0: x0,
@@ -117,7 +132,21 @@ export function buildMap(THREE, seed) {
     }
   }
 
-  addCeiling(THREE, group, ceilMat, ceilTex);
+  // One mesh (= one draw call) per material.
+  const merged = [
+    ['floors', batches.floor, floorMat],
+    ['walls', batches.wall, wallMat],
+    ['curbs', batches.curb, curbMat],
+    ['pools', batches.pool, poolBottomMat],
+  ];
+  for (const [name, batch, mat] of merged) {
+    if (!batch.count) continue;
+    const mesh = new THREE.Mesh(batch.build(THREE), mat);
+    mesh.name = name;
+    group.add(mesh);
+  }
+
+  addCeiling(THREE, group, ceilMat);
 
   // Start in the dry room closest to the center of the grid.
   const spawn = nearestDryRoom(poolRooms, Math.floor(GRID_W / 2), Math.floor(GRID_H / 2));
@@ -128,7 +157,33 @@ export function buildMap(THREE, seed) {
     spawn: { x: roomCenterX(spawn.i), z: roomCenterZ(spawn.j), yaw: 0 },
     poolRooms,
     lightsAt: allRoomCenters(),
+    pools: poolRooms.map((p) => ({ ...p, cx: roomCenterX(p.i), cz: roomCenterZ(p.j), half: POOL_HALF })),
+    // hDoors[j][i]: opening between (i, j) and (i + 1, j).
+    // vDoors[j][i]: opening between (i, j) and (i, j + 1).
+    doors: { h: hDoors, v: vDoors },
   };
+}
+
+/**
+ * Pool containing (x, z), or null. `index` is the pool's position in
+ * map.pools (also its slot in the water simulation).
+ */
+export function poolAt(pools, x, z) {
+  for (let k = 0; k < pools.length; k++) {
+    const p = pools[k];
+    if (Math.abs(x - p.cx) < p.half && Math.abs(z - p.cz) < p.half) return { index: k, pool: p };
+  }
+  return null;
+}
+
+/** Rooms reachable from (i, j) through an opening. */
+export function roomNeighbors(doors, i, j) {
+  const out = [];
+  if (i > 0 && doors.h[j][i - 1]) out.push({ i: i - 1, j });
+  if (i < GRID_W - 1 && doors.h[j][i]) out.push({ i: i + 1, j });
+  if (j > 0 && doors.v[j - 1][i]) out.push({ i, j: j - 1 });
+  if (j < GRID_H - 1 && doors.v[j][i]) out.push({ i, j: j + 1 });
+  return out;
 }
 
 export function roomCenterX(i) {
@@ -223,58 +278,41 @@ function pickPoolRooms(rng) {
   return rooms.slice(0, count);
 }
 
-function addRoomFloor(THREE, group, floorMat, poolBottomMat, curbMat, colliders, cx, cz, isPool) {
+// Static geometry is collected per material and merged (see boxbatch.js).
+function addRoomFloor(batches, cx, cz, isPool) {
   const half = ROOM_SIZE / 2;
+  const slabH = 0.08;
 
   if (!isPool) {
-    const geo = new THREE.PlaneGeometry(ROOM_SIZE, ROOM_SIZE);
-    const mesh = new THREE.Mesh(geo, floorMat);
-    mesh.rotation.x = -Math.PI / 2;
-    mesh.position.set(cx, 0, cz);
-    group.add(mesh);
+    batches.floor.add(cx, -slabH / 2, cz, ROOM_SIZE, slabH, ROOM_SIZE);
     return;
   }
 
   const opening = ROOM_SIZE - POOL_MARGIN * 2;
   const deck = POOL_MARGIN;
   // Four deck slabs around the pool, plus a sunken bottom.
-  const slabs = [
-    { w: ROOM_SIZE, d: deck, x: cx, z: cz - half + deck / 2 },
-    { w: ROOM_SIZE, d: deck, x: cx, z: cz + half - deck / 2 },
-    { w: deck, d: opening, x: cx - half + deck / 2, z: cz },
-    { w: deck, d: opening, x: cx + half - deck / 2, z: cz },
-  ];
-  for (const s of slabs) {
-    const mesh = new THREE.Mesh(new THREE.BoxGeometry(s.w, 0.08, s.d), floorMat);
-    mesh.position.set(s.x, -0.04, s.z);
-    group.add(mesh);
-  }
+  batches.floor.add(cx, -slabH / 2, cz - half + deck / 2, ROOM_SIZE, slabH, deck);
+  batches.floor.add(cx, -slabH / 2, cz + half - deck / 2, ROOM_SIZE, slabH, deck);
+  batches.floor.add(cx - half + deck / 2, -slabH / 2, cz, deck, slabH, opening);
+  batches.floor.add(cx + half - deck / 2, -slabH / 2, cz, deck, slabH, opening);
 
-  const bottom = new THREE.Mesh(new THREE.BoxGeometry(opening, 0.08, opening), poolBottomMat);
-  bottom.position.set(cx, -0.82, cz);
-  group.add(bottom);
+  batches.pool.add(cx, POOL_BOTTOM + 0.04, cz, opening, 0.08, opening);
 
   // Pit side walls, from the pool bottom up to the underside of the deck,
   // so you cannot see under the deck through the water.
   const pitT = 0.08;
-  const pitTop = -0.08; // underside of the deck slab (no coplanar overlap)
-  const pitBottom = -0.86;
+  const pitTop = -slabH; // underside of the deck slab (no coplanar overlap)
+  const pitBottom = POOL_BOTTOM;
   const pitH = pitTop - pitBottom;
   const pitY = (pitTop + pitBottom) / 2;
   const half2 = opening / 2 + pitT / 2;
-  const pitWalls = [
-    { w: opening + pitT * 2, d: pitT, x: cx, z: cz - half2 },
-    { w: opening + pitT * 2, d: pitT, x: cx, z: cz + half2 },
-    { w: pitT, d: opening, x: cx - half2, z: cz },
-    { w: pitT, d: opening, x: cx + half2, z: cz },
-  ];
-  for (const p of pitWalls) {
-    const mesh = new THREE.Mesh(new THREE.BoxGeometry(p.w, pitH, p.d), poolBottomMat);
-    mesh.position.set(p.x, pitY, p.z);
-    group.add(mesh);
-  }
+  batches.pool.add(cx, pitY, cz - half2, opening + pitT * 2, pitH, pitT);
+  batches.pool.add(cx, pitY, cz + half2, opening + pitT * 2, pitH, pitT);
+  batches.pool.add(cx - half2, pitY, cz, pitT, pitH, opening);
+  batches.pool.add(cx + half2, pitY, cz, pitT, pitH, opening);
 
-  // Thin curb around the pool edge so the drop is readable; also used as collision.
+  // Thin curb around the pool edge so the drop is readable. Not a collider:
+  // you can step over it and wade into the pool.
   const curbH = 0.16;
   const curbT = 0.16;
   const inner = opening / 2;
@@ -285,14 +323,11 @@ function addRoomFloor(THREE, group, floorMat, poolBottomMat, curbMat, colliders,
     { w: curbT, d: opening, x: cx + inner + curbT / 2, z: cz },
   ];
   for (const c of curbs) {
-    const mesh = new THREE.Mesh(new THREE.BoxGeometry(c.w, curbH, c.d), curbMat);
-    mesh.position.set(c.x, curbH / 2, c.z);
-    group.add(mesh);
-    addBoxCollider(colliders, c.x, c.z, c.w, c.d);
+    batches.curb.add(c.x, curbH / 2, c.z, c.w, curbH, c.d);
   }
 }
 
-function addWallWithDoor(THREE, group, wallMat, wallTex, colliders, { axis, a, b0, b1, open }) {
+function addWallWithDoor(batch, colliders, { axis, a, b0, b1, open }) {
   const mid = (b0 + b1) / 2;
   const doorHalf = DOOR_WIDTH / 2;
 
@@ -307,49 +342,28 @@ function addWallWithDoor(THREE, group, wallMat, wallTex, colliders, { axis, a, b
     const len = seg.to - seg.from;
     if (len < 0.05) continue;
     const centerB = (seg.from + seg.to) / 2;
-    addWallBox(THREE, group, wallMat, wallTex, colliders, axis, a, centerB, len, WALL_HEIGHT, WALL_HEIGHT / 2);
+    addWallBox(batch, colliders, axis, a, centerB, len, WALL_HEIGHT, WALL_HEIGHT / 2);
   }
 
   if (open) {
-    // Lintel above the doorway.
+    // Lintel above the doorway (no collider: it is above head height).
     const lintelH = WALL_HEIGHT - DOOR_HEIGHT;
     if (lintelH > 0.05) {
-      addWallBox(
-        THREE,
-        group,
-        wallMat,
-        wallTex,
-        colliders,
-        axis,
-        a,
-        mid,
-        DOOR_WIDTH,
-        lintelH,
-        DOOR_HEIGHT + lintelH / 2,
-        false,
-      );
+      addWallBox(batch, colliders, axis, a, mid, DOOR_WIDTH, lintelH, DOOR_HEIGHT + lintelH / 2, false);
     }
   }
 }
 
-function addWallBox(THREE, group, wallMat, wallTex, colliders, axis, a, centerB, length, height, y, collide = true) {
+function addWallBox(batch, colliders, axis, a, centerB, length, height, y, collide = true) {
   const w = axis === 'z' ? WALL_THICKNESS : length;
   const d = axis === 'z' ? length : WALL_THICKNESS;
   const x = axis === 'z' ? a : centerB;
   const z = axis === 'z' ? centerB : a;
-  const geo = new THREE.BoxGeometry(w, height, d);
-  const map = wallTex.clone();
-  map.repeat.set(length / 2, height / 2);
-  map.needsUpdate = true;
-  const mat = wallMat.clone();
-  mat.map = map;
-  const mesh = new THREE.Mesh(geo, mat);
-  mesh.position.set(x, y, z);
-  group.add(mesh);
+  batch.add(x, y, z, w, height, d);
   if (collide) addBoxCollider(colliders, x, z, w, d);
 }
 
-function addCeiling(THREE, group, ceilMat, ceilTex) {
+function addCeiling(THREE, group, ceilMat) {
   const w = GRID_W * ROOM_SIZE;
   const h = GRID_H * ROOM_SIZE;
   const cx = (GRID_W - 1) * ROOM_SIZE / 2;

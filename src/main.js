@@ -1,9 +1,11 @@
 import { parseSeed } from './rng.js';
 import { createRenderer } from './renderer.js';
-import { buildMap, WALL_HEIGHT } from './map.js';
+import { buildMap, poolAt, WALL_HEIGHT, POOL_FLOOR_Y } from './map.js';
 import { createWater } from './water.js';
 import { createControls } from './controls.js';
 import { createOverlay } from './overlay.js';
+import { createBench, parseBenchParam } from './bench.js';
+import { createRoomLights } from './lights.js';
 
 async function boot() {
   const params = new URLSearchParams(window.location.search);
@@ -45,20 +47,35 @@ async function boot() {
   const map = buildMap(THREE, seedInfo.seed);
   scene.add(map.group);
 
-  addLights(THREE, scene, map.lightsAt);
+  const lights = createRoomLights(THREE, scene, map.lightsAt, WALL_HEIGHT);
 
-  const water = await createWater(THREE, kind, map.poolRooms);
+  // ?water=sine forces the analytic water on WebGPU too (fair comparison).
+  const waterMode = params.get('water') === 'sine' ? 'sine' : 'sim';
+  const water = await createWater(THREE, kind, map.pools, { renderer, mode: waterMode, seed: seedInfo.seed });
   scene.add(water.group);
 
-  const controls = createControls(camera, renderer.domElement, () => map.colliders);
+  const benchSeconds = parseBenchParam(params);
+  const bench = benchSeconds ? createBench({ seconds: benchSeconds, map }) : null;
+
+  // Floor height under the player: pools are walkable (wading). The bench
+  // keeps a constant eye height so its frames stay comparable across runs.
+  const ground = (x, z) => (poolAt(map.pools, x, z) ? WADING : DRY);
+  const controls = createControls(camera, renderer.domElement, () => map.colliders, bench ? undefined : ground);
   controls.setPose(map.spawn.x, map.spawn.z, map.spawn.yaw);
 
+  // Small debug hook (console / headless tests).
+  window.__poolrooms = { THREE, renderer, scene, camera, controls, map, water, kind };
+
   const blocker = document.getElementById('blocker');
-  blocker.addEventListener('click', () => controls.lock());
-  document.addEventListener('pointerlockchange', () => {
-    if (controls.locked) blocker.classList.add('hidden');
-    else blocker.classList.remove('hidden');
-  });
+  if (bench) {
+    blocker.classList.add('hidden');
+  } else {
+    blocker.addEventListener('click', () => controls.lock());
+    document.addEventListener('pointerlockchange', () => {
+      if (controls.locked) blocker.classList.add('hidden');
+      else blocker.classList.remove('hidden');
+    });
+  }
 
   window.addEventListener('resize', () => {
     camera.aspect = window.innerWidth / window.innerHeight;
@@ -66,45 +83,76 @@ async function boot() {
     renderer.setSize(window.innerWidth, window.innerHeight);
   });
 
-  const clock = new THREE.Clock();
-  renderer.setAnimationLoop(() => {
-    const dt = clock.getDelta();
-    const t = clock.elapsedTime;
-    controls.update(dt);
-    water.update(t);
-    overlay.tick(performance.now());
+  const timer = new THREE.Timer();
+  timer.connect(document); // ignores time spent in a hidden tab
+  let infoFrame = 0;
+  renderer.setAnimationLoop((timestamp) => {
+    const now = performance.now();
+    timer.update(timestamp);
+    const dt = timer.getDelta();
+    let t = timer.getElapsed();
+
+    if (bench) {
+      const b = bench.frame(now);
+      // Drive everything time-based from the bench clock so both renderers
+      // render the same sequence of frames.
+      t = b.t;
+      const p = bench.pose(b.t);
+      controls.setPose(p.x, p.z, p.yaw, p.pitch);
+      if (!bench.done) {
+        overlay.setBench(b.warmup ? 'Bench: warming up…' : `Bench: ${Math.ceil(benchSeconds + 2 - b.t)} s left`);
+      }
+    } else {
+      controls.update(dt);
+    }
+
+    lights.update(camera.position.x, camera.position.z);
+    water.update(t, dt, wader(controls, map, camera));
     renderer.render(scene, camera);
+    overlay.tick(now);
+
+    // After render(): WebGPU resets its per-frame counters at the start of
+    // each animation frame, WebGL at the start of render().
+    if (bench?.done && !bench.reported) {
+      bench.reported = true;
+      reportBench(overlay, kind, seedInfo.seed, bench.result, renderer);
+    }
+
+    if (++infoFrame % 30 === 0) {
+      overlay.setInfo(
+        `Draw calls: ${drawCalls(renderer)} · lights: ${lights.activeCount}/${map.lightsAt.length}
+` +
+        `Water: ${water.label}`,
+      );
+    }
   });
 
 }
 
-function addLights(THREE, scene, lightsAt) {
-  const hemi = new THREE.HemisphereLight(0xf4f1de, 0x4a4a38, 0.6);
-  scene.add(hemi);
+const DRY = { y: 0, inWater: false };
+const WADING = { y: POOL_FLOOR_Y, inWater: true };
 
-  const ambient = new THREE.AmbientLight(0xe8dfc0, 0.4);
-  scene.add(ambient);
+/** The player as a water disturbance, or null when not in a pool. */
+function wader(controls, map, camera) {
+  const { x, z } = camera.position;
+  const hit = controls.state.inWater ? poolAt(map.pools, x, z) : null;
+  return hit ? { x, z, speed: controls.state.speed, pool: hit.index } : null;
+}
 
-  // One fluorescent-style point light per room. Intensity is in candela
-  // (physically based); 25 lights is acceptable for a 5x5 grid.
-  for (const pos of lightsAt) {
-    const light = new THREE.PointLight(0xf7f3dc, 26, 14, 1.6);
-    light.position.set(pos.x, WALL_HEIGHT - 0.28, pos.z);
-    scene.add(light);
+function drawCalls(renderer) {
+  const r = renderer.info?.render || {};
+  // WebGLRenderer: info.render.calls; WebGPURenderer: info.render.drawCalls.
+  return r.drawCalls ?? r.calls ?? '?';
+}
 
-    // Small fixture under the ceiling so the light has a visible source.
-    const fixture = new THREE.Mesh(
-      new THREE.BoxGeometry(1.6, 0.08, 0.35),
-      new THREE.MeshStandardMaterial({
-        color: 0xf7f3d8,
-        emissive: 0xf0ebd0,
-        emissiveIntensity: 1.4,
-        roughness: 0.6,
-      }),
-    );
-    fixture.position.set(pos.x, WALL_HEIGHT - 0.12, pos.z);
-    scene.add(fixture);
-  }
+function reportBench(overlay, kind, seed, result, renderer) {
+  const full = { renderer: kind, seed, drawCalls: drawCalls(renderer), ...result };
+  window.__benchResult = full;
+  console.log('BENCH', JSON.stringify(full));
+  overlay.setBench(
+    `Bench (${result.seconds}s): ${result.avgFps} fps avg\n` +
+    `frame ms  avg ${result.avgMs}  p50 ${result.p50Ms}  p95 ${result.p95Ms}  p99 ${result.p99Ms}`,
+  );
 }
 
 boot().catch((err) => {

@@ -9,13 +9,17 @@ export function createOverlay(element) {
   let rendererName = '…';
   let seedText = '';
   let extra = '';
+  let info = '';
+  let bench = '';
 
   function render() {
     element.textContent =
       `Renderer: ${rendererName}\n` +
       `FPS: ${fps}\n` +
       `Seed: ${seedText}` +
-      (extra ? `\n${extra}` : '');
+      (extra ? `\n${extra}` : '') +
+      (info ? `\n${info}` : '') +
+      (bench ? `\n${bench}` : '');
   }
 
   return {
@@ -29,6 +33,14 @@ export function createOverlay(element) {
     },
     setExtra(text) {
       extra = text;
+      render();
+    },
+    /** Low-frequency stats line (draw calls, lights, water mode...). */
+    setInfo(text) {
+      info = text;
+    },
+    setBench(text) {
+      bench = text;
       render();
     },
     tick(now) {

@@ -1,10 +1,16 @@
 /**
- * Shallow animated water planes. WebGPU uses a TSL node material;
- * WebGL uses a MeshStandardMaterial patched with GLSL. Both are lit and
- * share the same two sine waves, tint, opacity and fresnel-ish falloff.
+ * Water for the pools.
+ *
+ * - WebGPU (default): interactive height-field simulation in a compute
+ *   shader (waterSim.js) - ripples from the player wading and from drips.
+ * - WebGL, or WebGPU with ?water=sine: two analytic sine waves. WebGPU uses
+ *   a TSL node material, WebGL a MeshStandardMaterial patched with GLSL.
+ *   Both are lit and share the same waves, tint, opacity and fresnel-ish
+ *   falloff, so ?water=sine gives an apples-to-apples renderer comparison.
  */
 
-import { ROOM_SIZE, POOL_MARGIN, roomCenterX, roomCenterZ } from './map.js';
+import { ROOM_SIZE, POOL_MARGIN, WATER_Y } from './map.js';
+import { createComputeWater } from './waterSim.js';
 
 const COLOR_DEEP = 0x1c4d4f;
 const COLOR_SHALLOW = 0x4f8a86;
@@ -12,26 +18,38 @@ const COLOR_SHALLOW = 0x4f8a86;
 /**
  * @param {object} THREE
  * @param {'WebGPU'|'WebGL'} rendererKind
- * @param {{i:number,j:number}[]} poolRooms
+ * @param {{cx:number,cz:number,half:number}[]} pools
+ * @param {{renderer:object, mode:'sim'|'sine', seed:number}} opts
+ * @returns {Promise<{group:object, label:string, update(t:number, dt:number, wader?:object):void, splash?:Function}>}
  */
-export async function createWater(THREE, rendererKind, poolRooms) {
+export async function createWater(THREE, rendererKind, pools, { renderer, mode = 'sim', seed = 0 } = {}) {
+  if (rendererKind === 'WebGPU' && mode === 'sim') {
+    try {
+      return await createComputeWater(THREE, renderer, pools, LOOK, seed);
+    } catch (err) {
+      console.warn('Compute water failed, falling back to sine water:', err);
+    }
+  }
+
   const group = new THREE.Group();
   group.name = 'water';
   const width = ROOM_SIZE - POOL_MARGIN * 2 - 0.12;
   const material = await makeWaterMaterial(THREE, rendererKind);
-  if (!material) return { group, update() {} };
+  const label = rendererKind === 'WebGPU' ? 'sine (TSL)' : 'sine (GLSL)';
+  if (!material) return { group, label: 'none', update() {} };
 
-  for (const room of poolRooms) {
+  for (const pool of pools) {
     const geo = new THREE.PlaneGeometry(width, width, 48, 48);
     const mesh = new THREE.Mesh(geo, material);
     mesh.rotation.x = -Math.PI / 2;
-    mesh.position.set(roomCenterX(room.i), -0.28, roomCenterZ(room.j));
+    mesh.position.set(pool.cx, WATER_Y, pool.cz);
     mesh.renderOrder = 1;
     group.add(mesh);
   }
 
   return {
     group,
+    label,
     update(timeSec) {
       if (typeof material.userData.update === 'function') {
         material.userData.update(timeSec);
@@ -58,6 +76,15 @@ const WATER_OPACITY_BASE = 0.74; // facing the camera
 const WATER_OPACITY_GRAZING = 0.95; // at grazing angles (fresnel-ish)
 const WATER_METALNESS = 0.12;
 const WATER_ROUGHNESS = 0.22;
+
+const LOOK = {
+  deep: COLOR_DEEP,
+  shallow: COLOR_SHALLOW,
+  opacity: WATER_OPACITY_BASE,
+  opacityGrazing: WATER_OPACITY_GRAZING,
+  metalness: WATER_METALNESS,
+  roughness: WATER_ROUGHNESS,
+};
 
 // wave(x, y, t) = A1 * sin(k1 * x + w1 * t) + A2 * cos(k2 * y + w2 * t)
 const W = { a1: 0.07, k1: 0.85, w1: 1.15, a2: 0.045, k2: 0.7, w2: 0.9 };

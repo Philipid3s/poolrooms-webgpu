@@ -7,3 +7,5 @@ blob-report/
 .vite/
 *.local
 .DS_Store
+bench-*.png
+bench-results.json

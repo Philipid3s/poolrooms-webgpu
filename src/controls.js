@@ -9,9 +9,20 @@ const MOVE_SPEED = 5.4;
 const PLAYER_RADIUS = 0.32;
 const EYE_HEIGHT = 1.62;
 const PITCH_LIMIT = Math.PI / 2 - 0.05;
+const WADE_SPEED_FACTOR = 0.55; // slower while standing in a pool
+const STEP_SMOOTHING = 10; // 1/s, how fast the eye follows floor height changes
 
-export function createControls(camera, domElement, getColliders) {
+/**
+ * @param {object} camera
+ * @param {HTMLElement} domElement
+ * @param {() => object[]} getColliders axis-aligned boxes in XZ
+ * @param {(x:number, z:number) => {y:number, inWater:boolean}} [getGround]
+ *   floor height at (x, z); defaults to a flat floor at y = 0
+ */
+export function createControls(camera, domElement, getColliders, getGround = () => FLAT) {
   const keys = new Set();
+  // Exposed movement state (used for water wakes).
+  const state = { speed: 0, inWater: false };
   let yaw = 0;
   let pitch = 0;
   let locked = false;
@@ -78,6 +89,15 @@ export function createControls(camera, domElement, getColliders) {
   document.addEventListener('visibilitychange', onVisibilityChange);
   window.addEventListener('blur', releaseKeys);
 
+  // Ease the eye height towards the floor under the player (stepping
+  // down into / up out of a pool).
+  function followGround(dt) {
+    const ground = getGround(camera.position.x, camera.position.z);
+    state.inWater = ground.inWater;
+    const target = ground.y + EYE_HEIGHT;
+    camera.position.y += (target - camera.position.y) * (1 - Math.exp(-STEP_SMOOTHING * dt));
+  }
+
   applyLook();
   camera.position.y = EYE_HEIGHT;
 
@@ -95,24 +115,34 @@ export function createControls(camera, domElement, getColliders) {
         document.exitPointerLock();
       }
     },
-    setPose(x, z, yawValue = 0) {
+    get state() {
+      return state;
+    },
+    setPose(x, z, yawValue = 0, pitchValue = 0) {
+      const ground = getGround(x, z);
       camera.position.x = x;
-      camera.position.y = EYE_HEIGHT;
+      camera.position.y = ground.y + EYE_HEIGHT;
       camera.position.z = z;
+      state.inWater = ground.inWater;
+      state.speed = 0;
       yaw = yawValue;
-      pitch = 0;
+      pitch = pitchValue;
       applyLook();
     },
     update(dt) {
       // Only move while the pointer is locked (i.e. the player is "in" the scene).
       if (!locked || dt <= 0 || dt > 0.25) return;
+      state.speed = 0;
       let ax = 0;
       let az = 0;
       if (keys.has('KeyW') || keys.has('ArrowUp')) az += 1;
       if (keys.has('KeyS') || keys.has('ArrowDown')) az -= 1;
       if (keys.has('KeyD') || keys.has('ArrowRight')) ax += 1;
       if (keys.has('KeyA') || keys.has('ArrowLeft')) ax -= 1;
-      if (ax === 0 && az === 0) return;
+      if (ax === 0 && az === 0) {
+        followGround(dt);
+        return;
+      }
 
       const len = Math.hypot(ax, az) || 1;
       ax /= len;
@@ -126,14 +156,16 @@ export function createControls(camera, domElement, getColliders) {
       _right.x = cosY;
       _right.z = -sinY;
 
-      const speed = keys.has('ShiftLeft') || keys.has('ShiftRight') ? MOVE_SPEED * 1.55 : MOVE_SPEED;
+      let speed = keys.has('ShiftLeft') || keys.has('ShiftRight') ? MOVE_SPEED * 1.55 : MOVE_SPEED;
+      if (state.inWater) speed *= WADE_SPEED_FACTOR;
       const dx = (_forward.x * az + _right.x * ax) * speed * dt;
       const dz = (_forward.z * az + _right.z * ax) * speed * dt;
 
       const next = collide(camera.position.x, camera.position.z, dx, dz, PLAYER_RADIUS, getColliders());
+      state.speed = Math.hypot(next.x - camera.position.x, next.z - camera.position.z) / dt;
       camera.position.x = next.x;
       camera.position.z = next.z;
-      camera.position.y = EYE_HEIGHT;
+      followGround(dt);
     },
     dispose() {
       document.removeEventListener('pointerlockchange', onPointerLockChange);
@@ -146,6 +178,8 @@ export function createControls(camera, domElement, getColliders) {
     },
   };
 }
+
+const FLAT = { y: 0, inWater: false };
 
 function collide(x, z, dx, dz, radius, boxes) {
   let nx = x + dx;
