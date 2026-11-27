@@ -39,16 +39,26 @@ const STEP_INTERVAL = { slow: 0.78, fast: 0.42 };
 const HEIGHT = 2.3;
 const DOOR_APPROACH = 1.0; // metres before/after a doorway centre
 
+// How much harder the last level is than the first (difficulty = 1).
+// Even at full difficulty a running player stays faster than the lunge.
+const HARDER = { speed: 0.15, hearing: 0.3, grace: 7 };
+
 /**
  * @param {object} THREE
- * @param {{map:object, scene:object, seed:number}} opts
+ * @param {{map:object, scene:object, seed:number, difficulty?:number}} opts
+ *   difficulty 0 (first level, the base tuning) .. 1 (last level)
  */
-export function createThreat(THREE, { map, scene, seed }) {
+export function createThreat(THREE, { map, scene, seed, difficulty = 0 }) {
   const rng = mulberry32((seed ^ 0x7e11) >>> 0);
+  const k = Math.min(1, Math.max(0, difficulty));
+  const speedMul = 1 + HARDER.speed * k;
+  const hearMul = 1 + HARDER.hearing * k;
+  const graceSec = GRACE_SEC - HARDER.grace * k;
 
-  // Spawn in the room farthest (in doorways) from the player's spawn.
+  // Spawn in the room farthest (in doorways) from the player's spawn, but
+  // not in the exit room: it should not stand guard at the way out.
   const start = roomOf(map.spawn.x, map.spawn.z);
-  const far = farthestRoom(map.doors, start);
+  const far = farthestRoom(map.doors, start, map.exit);
   const pos = { x: roomCenterX(far.i), z: roomCenterZ(far.j) };
 
   let mode = 'dormant';
@@ -99,8 +109,8 @@ export function createThreat(THREE, { map, scene, seed }) {
 
   function noiseRadius(player) {
     if (player.speed < 0.3) return 0;
-    if (player.inWater) return HEARING.wade;
-    return player.speed > 6 ? HEARING.run : HEARING.walk;
+    if (player.inWater) return HEARING.wade * hearMul;
+    return (player.speed > 6 ? HEARING.run : HEARING.walk) * hearMul;
   }
 
   return {
@@ -124,7 +134,7 @@ export function createThreat(THREE, { map, scene, seed }) {
       const dist = Math.hypot(player.x - pos.x, player.z - pos.z);
 
       if (mode === 'dormant') {
-        if (elapsed >= GRACE_SEC) {
+        if (elapsed >= graceSec) {
           mode = 'wander';
           pickWanderGoal(player);
         }
@@ -155,8 +165,8 @@ export function createThreat(THREE, { map, scene, seed }) {
         }
 
         // --- movement ---
-        let speed = SPEED[mode] ?? SPEED.wander;
-        if (mode === 'chase' && dist < LUNGE_DIST) speed = LUNGE_SPEED;
+        let speed = (SPEED[mode] ?? SPEED.wander) * speedMul;
+        if (mode === 'chase' && dist < LUNGE_DIST) speed = LUNGE_SPEED * speedMul;
         const inWater = Boolean(poolAt(map.pools, pos.x, pos.z));
         if (inWater) speed *= WADE_FACTOR;
 
@@ -311,11 +321,13 @@ function bfs(doors, from) {
   return { prev, dist };
 }
 
-function farthestRoom(doors, from) {
+function farthestRoom(doors, from, avoid) {
   const { dist } = bfs(doors, from);
+  const avoidKey = avoid ? key(avoid) : -1;
   let best = from;
   let bestD = -1;
   for (const [k, d] of dist) {
+    if (k === avoidKey) continue;
     if (d > bestD) {
       bestD = d;
       best = { i: k % GRID_W, j: Math.floor(k / GRID_W) };

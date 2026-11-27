@@ -28,6 +28,7 @@ export const TILE_METERS = 2; // one texture repeat = 2 m (8 tiles of 25 cm)
  *   spawn: {x:number,z:number,yaw:number},
  *   poolRooms: {i:number,j:number}[],
  *   pools: {i:number,j:number,cx:number,cz:number,half:number}[],
+ *   exit: {x:number,z:number,nx:number,nz:number,i:number,j:number},
  * }}
  */
 export function buildMap(THREE, seed) {
@@ -153,6 +154,12 @@ export function buildMap(THREE, seed) {
   // Start in the dry room closest to the center of the grid.
   const spawn = nearestDryRoom(poolRooms, Math.floor(GRID_W / 2), Math.floor(GRID_H / 2));
 
+  // The way out: a door in the dry room farthest (in doorways) from the spawn.
+  const doors = { h: hDoors, v: vDoors };
+  const exitRoom = farthestDryRoom(doors, poolRooms, spawn);
+  const exit = placeExit(doors, exitRoom);
+  group.add(buildExitDoor(THREE, exit));
+
   return {
     group,
     colliders,
@@ -163,8 +170,189 @@ export function buildMap(THREE, seed) {
     materials: { pool: poolBottomMat },
     // hDoors[j][i]: opening between (i, j) and (i + 1, j).
     // vDoors[j][i]: opening between (i, j) and (i, j + 1).
-    doors: { h: hDoors, v: vDoors },
+    doors,
+    exit,
   };
+}
+
+/** Doorway distance from room `from` to every reachable room, keyed j * GRID_W + i. */
+export function roomDistances(doors, from) {
+  const dist = new Map([[from.j * GRID_W + from.i, 0]]);
+  const queue = [from];
+  while (queue.length) {
+    const r = queue.shift();
+    const d = dist.get(r.j * GRID_W + r.i);
+    for (const n of roomNeighbors(doors, r.i, r.j)) {
+      const k = n.j * GRID_W + n.i;
+      if (dist.has(k)) continue;
+      dist.set(k, d + 1);
+      queue.push(n);
+    }
+  }
+  return dist;
+}
+
+/** Deterministic: most doorways away, then farthest in a straight line, then row-major. */
+function farthestDryRoom(doors, poolRooms, from) {
+  const dist = roomDistances(doors, from);
+  let best = null;
+  let bestScore = -1;
+  for (let j = 0; j < GRID_H; j++) {
+    for (let i = 0; i < GRID_W; i++) {
+      if (poolRooms.some((p) => p.i === i && p.j === j)) continue;
+      const d = dist.get(j * GRID_W + i);
+      if (d === undefined) continue;
+      const score = d * 100 + (i - from.i) ** 2 + (j - from.j) ** 2;
+      if (score > bestScore) {
+        bestScore = score;
+        best = { i, j };
+      }
+    }
+  }
+  return best ?? from;
+}
+
+/**
+ * Put the exit door flat against one wall of the room, facing inwards.
+ * A closed wall is preferred (door centred); otherwise it goes on the wall
+ * beside the doorway.
+ */
+function placeExit(doors, { i, j }) {
+  const cx = roomCenterX(i);
+  const cz = roomCenterZ(j);
+  const face = ROOM_SIZE / 2 - WALL_THICKNESS / 2 - 0.04; // just off the wall face
+  // n = inward normal; (tx, tz) = along the wall.
+  const sides = [
+    { open: i > 0 && doors.h[j][i - 1], nx: 1, nz: 0 }, // west wall
+    { open: i < GRID_W - 1 && doors.h[j][i], nx: -1, nz: 0 }, // east wall
+    { open: j > 0 && doors.v[j - 1][i], nx: 0, nz: 1 }, // north wall
+    { open: j < GRID_H - 1 && doors.v[j][i], nx: 0, nz: -1 }, // south wall
+  ];
+  const side = sides.find((s) => !s.open) ?? sides[0];
+  const along = side.open ? (DOOR_WIDTH / 2 + ROOM_SIZE / 2) / 2 : 0; // middle of the wall beside the doorway
+  const tx = -side.nz;
+  const tz = side.nx;
+  return {
+    i,
+    j,
+    x: cx - side.nx * face + tx * along,
+    z: cz - side.nz * face + tz * along,
+    nx: side.nx,
+    nz: side.nz,
+  };
+}
+
+/**
+ * An emergency exit: a grey steel door with a push bar, and above it a
+ * French-style "ISSUE DE SECOURS" light box (white housing, green panel,
+ * running man heading for a door).
+ */
+function buildExitDoor(THREE, exit) {
+  const g = new THREE.Group();
+  g.name = 'exit';
+  const frameMat = new THREE.MeshStandardMaterial({ color: 0x8a8b84, roughness: 0.5, metalness: 0.4 });
+  const doorMat = new THREE.MeshStandardMaterial({ color: 0x9a9c94, roughness: 0.42, metalness: 0.45 });
+  const barMat = new THREE.MeshStandardMaterial({ color: 0xc9cbc4, roughness: 0.25, metalness: 0.8 });
+  const housingMat = new THREE.MeshStandardMaterial({ color: 0xeeebe2, roughness: 0.5, metalness: 0.0 });
+
+  // One merged mesh per material (see boxbatch.js).
+  const batches = new Map();
+  const box = (w, h, d, mat, x, y, z) => {
+    if (!batches.has(mat)) batches.set(mat, createBoxBatch(TILE_METERS));
+    batches.get(mat).add(x, y, z, w, h, d);
+  };
+
+  // Frame (two jambs and a head) and the door leaf.
+  box(0.09, 2.36, 0.08, frameMat, -0.7, 1.18, 0.04);
+  box(0.09, 2.36, 0.08, frameMat, 0.7, 1.18, 0.04);
+  box(1.49, 0.09, 0.08, frameMat, 0, 2.315, 0.04);
+  box(1.31, 2.26, 0.05, doorMat, 0, 1.13, 0.05);
+  // Push bar ("barre anti-panique") on two brackets.
+  box(1.02, 0.07, 0.05, barMat, 0, 1.02, 0.15);
+  box(0.06, 0.12, 0.09, barMat, -0.5, 1.02, 0.1);
+  box(0.06, 0.12, 0.09, barMat, 0.5, 1.02, 0.1);
+  // Kick plate.
+  box(1.2, 0.22, 0.01, barMat, 0, 0.13, 0.08);
+
+  // Emergency light box above the door, its face lit (unlit material).
+  box(0.92, 0.38, 0.09, housingMat, 0, 2.72, 0.045);
+  for (const [mat, batch] of batches) g.add(new THREE.Mesh(batch.build(THREE), mat));
+  const sign = new THREE.Mesh(
+    new THREE.PlaneGeometry(0.84, 0.32),
+    new THREE.MeshBasicMaterial({ map: exitSignTexture(THREE) }),
+  );
+  sign.position.set(0, 2.72, 0.092);
+  g.add(sign);
+
+  g.position.set(exit.x, 0, exit.z);
+  g.rotation.y = Math.atan2(exit.nx, exit.nz); // local +z = inward normal
+  return g;
+}
+
+/** Green panel: arrow, running man, door, then "ISSUE DE SECOURS". */
+function exitSignTexture(THREE) {
+  const c = document.createElement('canvas');
+  c.width = 512;
+  c.height = 196;
+  const ctx = c.getContext('2d');
+  const green = '#0a9a4a';
+  const white = '#f4fff6';
+  ctx.fillStyle = green;
+  ctx.fillRect(0, 0, c.width, c.height);
+
+  ctx.save();
+  ctx.translate(76, 4);
+  ctx.strokeStyle = white;
+  ctx.fillStyle = white;
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+
+  // Arrow pointing to the door.
+  ctx.lineWidth = 15;
+  ctx.beginPath();
+  ctx.moveTo(40, 74);
+  ctx.lineTo(102, 74);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(132, 74);
+  ctx.lineTo(98, 48);
+  ctx.lineTo(98, 100);
+  ctx.closePath();
+  ctx.fill();
+
+  // Running man.
+  ctx.beginPath();
+  ctx.arc(240, 30, 14, 0, Math.PI * 2);
+  ctx.fill();
+  const limb = (w, pts) => {
+    ctx.lineWidth = w;
+    ctx.beginPath();
+    ctx.moveTo(pts[0], pts[1]);
+    for (let k = 2; k < pts.length; k += 2) ctx.lineTo(pts[k], pts[k + 1]);
+    ctx.stroke();
+  };
+  limb(20, [230, 52, 212, 94]); // torso
+  limb(11, [229, 58, 252, 72, 272, 60]); // front arm
+  limb(11, [226, 58, 202, 64, 186, 50]); // back arm
+  limb(13, [212, 94, 238, 106, 244, 134]); // front leg
+  limb(13, [212, 94, 196, 116, 168, 120]); // back leg
+
+  // Door: white frame around a green opening.
+  ctx.fillRect(292, 16, 72, 124);
+  ctx.fillStyle = green;
+  ctx.fillRect(304, 28, 48, 112);
+  ctx.restore();
+
+  ctx.fillStyle = white;
+  ctx.font = 'bold 34px Arial, Helvetica, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('ISSUE DE SECOURS', c.width / 2, 172);
+
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = 4;
+  return tex;
 }
 
 /**

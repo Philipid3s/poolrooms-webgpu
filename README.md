@@ -6,7 +6,9 @@ On WebGPU, the pools are an interactive wave simulation run in a compute shader:
 
 The sound is synthesized live with the Web Audio API (no audio files): fluorescent hum from the nearest fixtures, lapping water from each pool, a “plic” for each drip, and footsteps on tile or in water, all with a tiled-room echo.
 
-**You are not alone.** After a short grace period, a hostile presence starts roaming the rooms. It is almost invisible: a tall dark silhouette you glimpse in the haze, which fades when it gets close. You notice it through the world: fluorescent tubes flicker and crackle near it, you hear its breathing and its heavy wet steps, and on WebGPU it leaves ripples when it wades through a pool. It hears you walk (and hears you run or wade from much further away), and it chases you when it sees you. If it catches you, you wake up somewhere else: a new level with a new seed.
+**You are not alone.** After a short grace period, a hostile presence starts roaming the rooms. It is almost invisible: a tall dark silhouette you glimpse in the haze, which fades when it gets close. You notice it through the world: fluorescent tubes flicker and crackle near it, you hear its breathing and its heavy wet steps, and on WebGPU it leaves ripples when it wades through a pool. It hears you walk (and hears you run or wade from much further away), and it chases you when it sees you. If it catches you, you wake up somewhere else: the same level, with new rooms.
+
+**Find the way out.** Each level hides an emergency exit (a steel door with a green “ISSUE DE SECOURS” light box) in the dry room farthest from where you start. Go through it to reach the next level. There are 10 levels. With each one the presence gets a little faster (up to +15 %), hears you from a little further away (up to +30 %), wakes sooner (from 15 s down to 8 s), and the haze gets thicker. Level 1 uses the base tuning. After level 10 you are out.
 
 This started as a renderer proof of concept and is now a small local game. It is not published on GitHub Pages or any other host.
 
@@ -50,6 +52,7 @@ Versions are pinned exactly in `package.json` (no `^` / `~`). Use `npm ci` so th
 | `?seed=42` | Build the map from this seed. Numeric seeds are used as-is; any other string is hashed to a 32-bit seed. The same seed always produces the same layout and spawn point. If you omit it, a seed is generated and written into the URL. |
 | `?renderer=webgl` | Skip WebGPU detection and force `WebGLRenderer`, for a side-by-side comparison. |
 | `?water=sine` | On WebGPU, use the analytic sine-wave water instead of the compute simulation (same water as WebGL, for a like-for-like comparison). |
+| `?level=3` | Start at this level (1 to 10). Reaching the exit moves on to the next level with a new seed; being caught restarts the same level with a new seed. |
 | `?threat=off` | No hostile presence (exploration only). It is always off in benchmark mode. |
 | `?debug` | Shows the presence's state and distance in the HUD, and lets it act while the pointer is not locked (for headless tests). |
 | `?bench` / `?bench=30` | Benchmark mode: the camera follows a fixed tour of the map for 15 s (or the given number of seconds) after a 2 s warm-up, then the HUD shows average fps and frame-time percentiles. The tour is a function of time, so both renderers draw the same frames. |

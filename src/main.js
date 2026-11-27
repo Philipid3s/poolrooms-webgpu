@@ -10,6 +10,9 @@ import { applyCaustics } from './caustics.js';
 import { createAudio } from './audio.js';
 import { createThreat } from './threat.js';
 
+const LAST_LEVEL = 10;
+const EXIT_REACH = 1.1; // metres from the door's front to go through it
+
 async function boot() {
   const params = new URLSearchParams(window.location.search);
   const seedInfo = parseSeed(params.get('seed'));
@@ -24,6 +27,12 @@ async function boot() {
     ? `${seedInfo.label} (${seedInfo.seed})`
     : String(seedInfo.seed);
   overlay.setSeed(seedText);
+
+  // ?level=N (1..LAST_LEVEL). Each level is a fresh seeded map; the presence
+  // gets a little faster, sharper of hearing and quicker to wake.
+  const level = Math.min(LAST_LEVEL, Math.max(1, Math.floor(Number(params.get('level'))) || 1));
+  const difficulty = (level - 1) / (LAST_LEVEL - 1);
+  overlay.setLevel(`${level} / ${LAST_LEVEL}`);
 
   let created;
   try {
@@ -43,7 +52,7 @@ async function boot() {
 
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(0x2a271c);
-  scene.fog = new THREE.FogExp2(0x3a3628, 0.018);
+  scene.fog = new THREE.FogExp2(0x3a3628, 0.018 + 0.008 * difficulty); // thicker haze deeper in
 
   const camera = new THREE.PerspectiveCamera(72, window.innerWidth / window.innerHeight, 0.1, 200);
 
@@ -79,17 +88,23 @@ async function boot() {
   // pointer is not locked (headless tests).
   const debug = params.has('debug');
   const threat = !bench && params.get('threat') !== 'off'
-    ? createThreat(THREE, { map, scene, seed: seedInfo.seed })
+    ? createThreat(THREE, { map, scene, seed: seedInfo.seed, difficulty })
     : null;
   let caught = false;
+  let escaped = false;
 
   // Small debug hook (console / headless tests).
   window.__poolrooms = { THREE, renderer, scene, camera, controls, map, water, audio, threat, kind };
 
+  const title = document.querySelector('#blocker h1');
+  const subtitle = document.getElementById('level-line');
   if (params.has('woke')) {
-    // We were caught in the previous level.
-    document.querySelector('#blocker h1').textContent = 'You wake up somewhere else.';
+    // We were caught: same level, new rooms.
+    title.textContent = 'You wake up somewhere else.';
+  } else if (level > 1) {
+    title.textContent = 'Deeper.';
   }
+  subtitle.textContent = `Level ${level} of ${LAST_LEVEL}. Find the emergency exit (ISSUE DE SECOURS).`;
 
   const blocker = document.getElementById('blocker');
   if (bench) {
@@ -141,11 +156,16 @@ async function boot() {
     let th = null;
     if (threat) {
       const player = { x: camera.position.x, z: camera.position.z, ...controls.state };
-      th = threat.update(controls.locked || debug ? dt : 0, t, player, camera);
-      if (th.caught && !caught && (controls.locked || debug)) {
+      th = threat.update((controls.locked || debug) && !escaped ? dt : 0, t, player, camera);
+      if (th.caught && !caught && !escaped && (controls.locked || debug)) {
         caught = true;
         onCaught(audio, controls);
       }
+    }
+
+    if (!bench && !caught && !escaped && (controls.locked || debug) && atExit(map.exit, camera.position)) {
+      escaped = true;
+      onExit(audio, controls, level);
     }
 
     lights.update(camera.position.x, camera.position.z, t, th?.active ? th : null);
@@ -185,6 +205,37 @@ function onCaught(audio, controls) {
     const url = new URL(window.location.href);
     url.searchParams.set('seed', String((Math.random() * 0xffffffff) >>> 0));
     url.searchParams.set('woke', '1');
+    window.location.assign(url);
+  }, 2600);
+}
+
+/** Within reach of the exit door, standing in front of it. */
+function atExit(exit, p) {
+  const fx = exit.x + exit.nx * 0.5;
+  const fz = exit.z + exit.nz * 0.5;
+  return Math.hypot(p.x - fx, p.z - fz) < EXIT_REACH;
+}
+
+/**
+ * Through the exit: on to the next level (new seed), or the end screen
+ * after the last one.
+ */
+function onExit(audio, controls, level) {
+  audio.exit();
+  document.getElementById('fade').classList.add('on');
+  setTimeout(() => {
+    controls.unlock();
+    const url = new URL(window.location.href);
+    url.searchParams.set('seed', String((Math.random() * 0xffffffff) >>> 0));
+    url.searchParams.delete('woke');
+    if (level >= LAST_LEVEL) {
+      url.searchParams.set('level', '1');
+      const end = document.getElementById('ending');
+      end.classList.add('on');
+      end.addEventListener('click', () => window.location.assign(url), { once: true });
+      return;
+    }
+    url.searchParams.set('level', String(level + 1));
     window.location.assign(url);
   }, 2600);
 }

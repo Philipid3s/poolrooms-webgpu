@@ -58,6 +58,24 @@
         transition: opacity 1.8s ease-in;
       }
       #fade.on { opacity: 1; }
+      #ending {
+        position: fixed;
+        inset: 0;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        flex-direction: column;
+        gap: 14px;
+        color: #f3ecd6;
+        background: #000;
+        z-index: 30;
+        cursor: pointer;
+        text-align: center;
+        padding: 24px;
+      }
+      #ending.on { display: flex; }
+      #ending h1 { font-size: 26px; font-weight: 600; letter-spacing: 0.03em; }
+      #ending p { font-size: 13px; opacity: 0.8; line-height: 1.55; }
       #blocker p {
         font-size: 13px;
         opacity: 0.88;
@@ -71,12 +89,17 @@
     <div id="blocker">
       <div>
         <h1>Poolrooms</h1>
+        <p id="level-line" style="margin-bottom: 8px"></p>
         <p>
           Click to enter (pointer lock).<br />
           WASD to move · mouse to look · M to mute · Esc to release.<br />
           Sound on. Something else is here: keep moving, keep quiet.
         </p>
       </div>
+    </div>
+    <div id="ending">
+      <h1>You found the way out.</h1>
+      <p>Daylight. Dry air. The hum is gone.<br />Click to go back in.</p>
     </div>
     <script type="module" src="/src/main.js"></script>
   </body>

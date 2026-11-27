@@ -457,6 +457,62 @@ export function createAudio(THREE, { fixtures, fixtureY, pools, waterY }) {
       // Everything else fades away.
       nodes.master.gain.setTargetAtTime(0, now + 0.4, 0.6);
     },
+    /** The player went through the exit: a heavy latch, a rush of air, then silence. */
+    exit() {
+      if (!ctx || ctx.state !== 'running') return;
+      const now = ctx.currentTime;
+      const out = ctx.createGain();
+      out.connect(nodes.master);
+      const send = ctx.createGain();
+      send.gain.value = 0.8;
+      out.connect(send).connect(nodes.reverbIn);
+
+      // Latch: a short metallic click.
+      const click = ctx.createBufferSource();
+      click.buffer = nodes.noise;
+      const bp = ctx.createBiquadFilter();
+      bp.type = 'bandpass';
+      bp.frequency.value = 1800;
+      bp.Q.value = 3;
+      const clickEnv = ctx.createGain();
+      clickEnv.gain.setValueAtTime(0, now);
+      clickEnv.gain.linearRampToValueAtTime(0.5, now + 0.005);
+      clickEnv.gain.setTargetAtTime(0, now + 0.01, 0.04);
+      click.connect(bp).connect(clickEnv).connect(out);
+      click.start(now, 0.3, 0.3);
+
+      // The door swinging shut behind you: a low thump.
+      const thump = ctx.createOscillator();
+      thump.frequency.setValueAtTime(90, now + 0.12);
+      thump.frequency.exponentialRampToValueAtTime(40, now + 0.5);
+      const thumpEnv = ctx.createGain();
+      thumpEnv.gain.setValueAtTime(0, now);
+      thumpEnv.gain.setValueAtTime(0, now + 0.12);
+      thumpEnv.gain.linearRampToValueAtTime(0.55, now + 0.13);
+      thumpEnv.gain.setTargetAtTime(0, now + 0.15, 0.12);
+      thump.connect(thumpEnv).connect(out);
+      thump.start(now);
+      thump.stop(now + 1);
+
+      // A rush of air rising, like a draught from somewhere else.
+      const air = ctx.createBufferSource();
+      air.buffer = nodes.noise;
+      const lp = ctx.createBiquadFilter();
+      lp.type = 'lowpass';
+      lp.frequency.setValueAtTime(250, now);
+      lp.frequency.exponentialRampToValueAtTime(1600, now + 1.8);
+      const airEnv = ctx.createGain();
+      airEnv.gain.setValueAtTime(0, now);
+      airEnv.gain.linearRampToValueAtTime(0.14, now + 1.2);
+      airEnv.gain.setTargetAtTime(0, now + 1.5, 0.4);
+      air.connect(lp).connect(airEnv).connect(out);
+      air.loop = true; // the noise buffer is 2 s long
+      air.start(now);
+      air.stop(now + 3.2);
+
+      // Everything else fades away.
+      nodes.master.gain.setTargetAtTime(0, now + 1.2, 0.5);
+    },
     toggleMute() {
       muted = !muted;
       if (ctx) nodes.master.gain.setTargetAtTime(muted ? 0 : MASTER_LEVEL, ctx.currentTime, 0.05);

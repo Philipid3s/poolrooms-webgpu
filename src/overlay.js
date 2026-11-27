@@ -8,6 +8,7 @@ export function createOverlay(element) {
   let last = performance.now();
   let rendererName = '…';
   let seedText = '';
+  let levelText = '';
   let extra = '';
   let info = '';
   let bench = '';
@@ -16,6 +17,8 @@ export function createOverlay(element) {
     element.textContent =
       `Renderer: ${rendererName}\n` +
       `FPS: ${fps}\n` +
+      (levelText ? `Level: ${levelText}
+` : '') +
       `Seed: ${seedText}` +
       (extra ? `\n${extra}` : '') +
       (info ? `\n${info}` : '') +
@@ -25,6 +28,10 @@ export function createOverlay(element) {
   return {
     setRenderer(name) {
       rendererName = name;
+      render();
+    },
+    setLevel(text) {
+      levelText = text;
       render();
     },
     setSeed(text) {
