@@ -58,6 +58,29 @@
         transition: opacity 1.8s ease-in;
       }
       #fade.on { opacity: 1; }
+      #stamina {
+        position: fixed;
+        left: 50%;
+        bottom: 28px;
+        width: 180px;
+        height: 4px;
+        margin-left: -90px;
+        background: rgba(0, 0, 0, 0.35);
+        border-radius: 2px;
+        opacity: 0;
+        transition: opacity 0.6s;
+        pointer-events: none;
+        z-index: 4;
+      }
+      #stamina.on { opacity: 1; }
+      #stamina div {
+        height: 100%;
+        width: 100%;
+        border-radius: 2px;
+        background: rgba(243, 236, 214, 0.75);
+        transform-origin: left;
+      }
+      #stamina.winded div { background: rgba(214, 92, 72, 0.85); }
       #ending {
         position: fixed;
         inset: 0;
@@ -86,13 +109,14 @@
   <body>
     <div id="overlay">Initializing…</div>
     <div id="fade"></div>
+    <div id="stamina"><div></div></div>
     <div id="blocker">
       <div>
         <h1>Poolrooms</h1>
         <p id="level-line" style="margin-bottom: 8px"></p>
         <p>
           Click to enter (pointer lock).<br />
-          WASD to move · mouse to look · M to mute · Esc to release.<br />
+          WASD to move · Shift to run (it tires you) · mouse to look · M to mute · Esc to release.<br />
           Sound on. Something else is here: keep moving, keep quiet.
         </p>
       </div>

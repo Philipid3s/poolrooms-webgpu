@@ -49,10 +49,11 @@ Deployment is not done by CI. It is done by digest (`ghcr.io/philipid3s/poolroom
 
 - Click the scene to lock the pointer.
 - Mouse — look around.
-- `W` `A` `S` `D` (or arrow keys) — move. Hold Shift to walk faster.
+- `W` `A` `S` `D` (or arrow keys) — move. Hold Shift to run.
+- Running drains your stamina: about 4.5 s from full. A thin bar at the bottom of the screen shows it while it is not full, and you hear yourself panting. It refills slowly (about 7 s) once you stop running. If you empty it you are winded (the bar turns red) and cannot run again until about a third of it is back.
 - `M` — mute / unmute. Sound starts with the first click (browsers require a user gesture).
 - The presence only acts while you are in the scene (pointer locked); releasing the pointer pauses it.
-- Survival tips: running is faster than the presence but can be heard 16 m away; walking is heard at 6 m, wading at 10 m. In the water you are slower than it.
+- Survival tips: running is faster than the presence, but only in short bursts, and it can be heard 16 m away; walking is heard at 6 m, wading at 10 m. In the water you are slower than it.
 - `Esc` — release the pointer.
 - Movement is blocked by walls. Step over a pool's curb to wade in: you sink to the pool floor and move slower. On WebGPU your movement makes ripples. There is no jump.
 

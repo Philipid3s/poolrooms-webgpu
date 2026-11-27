@@ -11,6 +11,14 @@ const EYE_HEIGHT = 1.62;
 const PITCH_LIMIT = Math.PI / 2 - 0.05;
 const WADE_SPEED_FACTOR = 0.55; // slower while standing in a pool
 const STEP_SMOOTHING = 10; // 1/s, how fast the eye follows floor height changes
+const RUN_FACTOR = 1.55;
+// Stamina (0..1): running drains it, anything else slowly refills it.
+const STAMINA = {
+  runSeconds: 4.5, // full to empty while running
+  refillSeconds: 7, // empty to full
+  refillDelay: 0.8, // s after you stop running before it refills
+  recover: 0.35, // once out of breath, you cannot run again until this much is back
+};
 
 /**
  * @param {object} camera
@@ -22,7 +30,9 @@ const STEP_SMOOTHING = 10; // 1/s, how fast the eye follows floor height changes
 export function createControls(camera, domElement, getColliders, getGround = () => FLAT) {
   const keys = new Set();
   // Exposed movement state (used for water wakes).
-  const state = { speed: 0, inWater: false };
+  // stamina / winded: see STAMINA (winded = emptied it, cannot run yet).
+  const state = { speed: 0, inWater: false, stamina: 1, winded: false };
+  let restClock = 0;
   let yaw = 0;
   let pitch = 0;
   let locked = false;
@@ -30,6 +40,20 @@ export function createControls(camera, domElement, getColliders, getGround = () 
   // Scratch vectors, reused every frame.
   const _forward = { x: 0, z: 0 };
   const _right = { x: 0, z: 0 };
+
+  function updateStamina(dt, running) {
+    if (running) {
+      restClock = 0;
+      state.stamina = Math.max(0, state.stamina - dt / STAMINA.runSeconds);
+      if (state.stamina === 0) state.winded = true;
+      return;
+    }
+    restClock += dt;
+    if (restClock >= STAMINA.refillDelay) {
+      state.stamina = Math.min(1, state.stamina + dt / STAMINA.refillSeconds);
+    }
+    if (state.winded && state.stamina >= STAMINA.recover) state.winded = false;
+  }
 
   function applyLook() {
     pitch = Math.max(-PITCH_LIMIT, Math.min(PITCH_LIMIT, pitch));
@@ -139,6 +163,9 @@ export function createControls(camera, domElement, getColliders, getGround = () 
       if (keys.has('KeyS') || keys.has('ArrowDown')) az -= 1;
       if (keys.has('KeyD') || keys.has('ArrowRight')) ax += 1;
       if (keys.has('KeyA') || keys.has('ArrowLeft')) ax -= 1;
+      const wantsRun = keys.has('ShiftLeft') || keys.has('ShiftRight');
+      const running = wantsRun && !state.winded && (ax !== 0 || az !== 0);
+      updateStamina(dt, running);
       if (ax === 0 && az === 0) {
         followGround(dt);
         return;
@@ -156,7 +183,7 @@ export function createControls(camera, domElement, getColliders, getGround = () 
       _right.x = cosY;
       _right.z = -sinY;
 
-      let speed = keys.has('ShiftLeft') || keys.has('ShiftRight') ? MOVE_SPEED * 1.55 : MOVE_SPEED;
+      let speed = running ? MOVE_SPEED * RUN_FACTOR : MOVE_SPEED;
       if (state.inWater) speed *= WADE_SPEED_FACTOR;
       const dx = (_forward.x * az + _right.x * ax) * speed * dt;
       const dz = (_forward.z * az + _right.z * ax) * speed * dt;

@@ -11,6 +11,8 @@
  * - The hostile presence (threat.js): breathing and a low drone that follow
  *   it, heavy wet steps, crackling tubes near it, a stinger when it starts
  *   chasing you, and a violent burst when it catches you.
+ * - Your own breathing: panting that builds up as running drains your
+ *   stamina (controls.js) and slowly settles when you recover.
  * - Everything except the hum goes through a generated tiled-room reverb:
  *   that is the echo.
  *
@@ -28,6 +30,8 @@ const WADE_STEP_INTERVAL = 0.62;
 const STEP_LEVEL = 0.5; // overall footstep loudness
 const MASTER_LEVEL = 0.8;
 const CRACKLE_RADIUS = 10; // matches lights.js FLICKER_RADIUS
+const PANT_LEVEL = 0.32; // player's breathing when out of breath (narrow formant bands: needs more gain)
+const PANT_RATE = [0.45, 1.25]; // breaths per second: catching breath .. winded
 
 /**
  * @param {object} THREE either build (only Vector3 is used)
@@ -44,6 +48,7 @@ export function createAudio(THREE, { fixtures, fixtureY, pools, waterY }) {
   let muted = false;
   let stepClock = 0;
   let foot = 0;
+  let pantPhase = 0;
   const fwd = new THREE.Vector3();
   const up = new THREE.Vector3();
 
@@ -80,6 +85,7 @@ export function createAudio(THREE, { fixtures, fixtureY, pools, waterY }) {
       water: buildWater(master, reverbIn, brown),
     };
     nodes.threat = buildThreatVoice(master, reverbIn, brown);
+    nodes.pant = buildPant(master, reverbIn);
     return true;
   }
 
@@ -240,6 +246,79 @@ export function createAudio(THREE, { fixtures, fixtureY, pools, waterY }) {
     }
     drone.connect(panner);
     return { panner, breath, drone };
+  }
+
+  // --- player breathing --------------------------------------------------
+  // Separate breaths (one-shots with silence in between), not a modulated
+  // noise loop: a continuous swelling band of noise sounds like a mop.
+  function buildPant(master, reverbIn) {
+    const bus = ctx.createGain();
+    bus.connect(master);
+    const send = ctx.createGain();
+    send.gain.value = 0.12;
+    bus.connect(send).connect(reverbIn);
+    return { bus };
+  }
+
+  /**
+   * One breath through an open mouth: noise shaped by vowel-like formants
+   * ("hah"). Exhale: quick attack, quick fall. Inhale: shorter, softer,
+   * a little brighter.
+   */
+  function playBreath(exhale, effort) {
+    const now = ctx.currentTime;
+    const jitter = 0.92 + Math.random() * 0.16;
+    const src = ctx.createBufferSource();
+    src.buffer = nodes.noise;
+    const hp = ctx.createBiquadFilter();
+    hp.type = 'highpass';
+    hp.frequency.value = 450;
+    src.connect(hp);
+
+    const env = ctx.createGain();
+    env.gain.value = 0;
+    env.connect(nodes.pant.bus);
+    const formants = exhale
+      ? [[750, 5, 1], [1200, 6, 0.7], [2500, 7, 0.35]]
+      : [[900, 5, 0.6], [1600, 6, 0.8], [2900, 7, 0.45]];
+    for (const [f, q, g] of formants) {
+      const bp = ctx.createBiquadFilter();
+      bp.type = 'bandpass';
+      bp.frequency.value = f * jitter;
+      bp.Q.value = q;
+      const fg = ctx.createGain();
+      fg.gain.value = g;
+      hp.connect(bp).connect(fg).connect(env);
+    }
+
+    const peak = PANT_LEVEL * effort * (exhale ? 1 : 0.45) * (0.85 + Math.random() * 0.3);
+    const attack = exhale ? 0.035 : 0.07;
+    const hold = exhale ? 0.06 : 0.04;
+    const fall = exhale ? 0.07 : 0.05; // time constant
+    env.gain.setValueAtTime(0, now);
+    env.gain.linearRampToValueAtTime(peak, now + attack);
+    env.gain.setValueAtTime(peak, now + attack + hold);
+    env.gain.setTargetAtTime(0, now + attack + hold, fall);
+    src.start(now, Math.random() * 1.5, 0.5);
+  }
+
+  function updatePant(move, dt) {
+    const stamina = move.stamina ?? 1;
+    // Silent above ~75 % stamina, full when winded.
+    const effort = move.winded ? 1 : smoothstep(0.75, 0.1, stamina);
+    if (effort < 0.02) {
+      pantPhase = 0;
+      return;
+    }
+    const rate = PANT_RATE[0] + (PANT_RATE[1] - PANT_RATE[0]) * effort;
+    const before = pantPhase;
+    pantPhase += dt * rate;
+    // Inhale at the start of each cycle, exhale a little before half way.
+    if (before < 0.4 && pantPhase >= 0.4) playBreath(true, effort);
+    if (pantPhase >= 1) {
+      pantPhase -= 1;
+      playBreath(false, effort);
+    }
   }
 
   function updateThreat(th, t) {
@@ -553,6 +632,7 @@ export function createAudio(THREE, { fixtures, fixtureY, pools, waterY }) {
       updateWater(t);
       if (drip) playDrip(drip.x, drip.z);
       updateThreat(threat, t);
+      updatePant(move, dt);
 
       // Footsteps at a fixed cadence while moving.
       if (move.speed > 0.3) {

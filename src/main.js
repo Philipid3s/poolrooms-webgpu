@@ -129,6 +129,8 @@ async function boot() {
     renderer.setSize(window.innerWidth, window.innerHeight);
   });
 
+  const stamina = createStaminaBar(document.getElementById('stamina'));
+
   const timer = new THREE.Timer();
   timer.connect(document); // ignores time spent in a hidden tab
   let infoFrame = 0;
@@ -150,6 +152,7 @@ async function boot() {
       }
     } else {
       controls.update(dt);
+      stamina.update(controls.state);
     }
 
     // The presence only acts while you are in the scene (pointer locked).
@@ -207,6 +210,27 @@ function onCaught(audio, controls) {
     url.searchParams.set('woke', '1');
     window.location.assign(url);
   }, 2600);
+}
+
+/** Thin bar at the bottom of the screen, shown only while not full. */
+function createStaminaBar(el) {
+  const fill = el.firstElementChild;
+  let shown = -1;
+  let winded = null;
+  return {
+    update({ stamina, winded: w }) {
+      const v = Math.round(stamina * 100) / 100;
+      if (v !== shown) {
+        shown = v;
+        fill.style.transform = `scaleX(${v})`;
+        el.classList.toggle('on', v < 1);
+      }
+      if (w !== winded) {
+        winded = w;
+        el.classList.toggle('winded', w);
+      }
+    },
+  };
 }
 
 /** Within reach of the exit door, standing in front of it. */
