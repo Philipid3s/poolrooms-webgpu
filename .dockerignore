@@ -1,0 +1,15 @@
+node_modules
+dist
+.git
+.github
+.vite
+shots
+screenshots
+smoke.png
+test-results
+playwright-report
+blob-report
+bench-results.json
+*.log
+.env*
+.DS_Store

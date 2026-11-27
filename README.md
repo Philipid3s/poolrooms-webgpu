@@ -34,6 +34,17 @@ npm run preview
 Versions are pinned exactly in `package.json` (no `^` / `~`). Use `npm ci` so the lockfile is respected.
 
 
+## CI & deployment
+
+GitHub Actions (`.github/workflows/ci.yml`) runs on every pull request, on every push to `main` and on manual dispatch:
+
+- **verify** (always): `npm ci`, `npm run build`, then the headless WebGL smoke test (`scripts/smoke.mjs`, one automatic retry) against `vite preview`. The `dist/` build is kept as a workflow artifact.
+- **image** (push to `main` only, after `verify`): builds the Docker image (`Dockerfile`: Vite build, served by nginx on port 80), scans it with Trivy (the job fails on any fixable CRITICAL vulnerability), and only if the scan passes pushes it to GitHub Container Registry with provenance and SBOM attestations.
+
+The image is published as `ghcr.io/philipid3s/poolrooms-webgpu`, tagged `sha-<first 7 chars of the commit>`. There is **no `latest` tag**. The tag and the immutable digest (`sha256:...`) of each build are written to the run's job summary.
+
+Deployment is not done by CI. It is done by digest (`ghcr.io/philipid3s/poolrooms-webgpu@sha256:...`, with a rollback to the previous digest) by Boris (DevOps) on the VPS, only after Julien's go for each rollout.
+
 ## Controls
 
 - Click the scene to lock the pointer.
